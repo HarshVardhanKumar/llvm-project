@@ -73,7 +73,7 @@ std::unique_ptr<OperationPass<FuncOp>>
 createSuperVectorizePass(ArrayRef<int64_t> virtualVectorSize);
 /// Overload relying on pass options for initialization.
 std::unique_ptr<OperationPass<FuncOp>> createSuperVectorizePass();
-
+std::unique_ptr<OperationPass<FuncOp>> createAffineLoopInterchangePass();
 //===----------------------------------------------------------------------===//
 // Registration
 //===----------------------------------------------------------------------===//
