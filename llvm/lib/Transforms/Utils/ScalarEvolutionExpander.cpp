@@ -1951,11 +1951,8 @@ void SCEVExpander::rememberInstruction(Value *I) {
     // a defining loop. Fix LCSSA from for each operand of the new instruction,
     // if required.
     for (unsigned OpIdx = 0, OpEnd = Inst->getNumOperands(); OpIdx != OpEnd;
-         OpIdx++) {
-      auto *V = fixupLCSSAFormFor(Inst, OpIdx);
-      if (V != I)
-        DoInsert(V);
-    }
+         OpIdx++)
+      fixupLCSSAFormFor(Inst, OpIdx);
   }
 }
 
@@ -2540,7 +2537,16 @@ Value *SCEVExpander::fixupLCSSAFormFor(Instruction *User, unsigned OpIdx) {
     return OpV;
 
   ToUpdate.push_back(OpI);
-  formLCSSAForInstructions(ToUpdate, SE.DT, SE.LI, &SE);
+  SmallVector<PHINode *, 16> PHIsToRemove;
+  formLCSSAForInstructions(ToUpdate, SE.DT, SE.LI, &SE, Builder, &PHIsToRemove);
+  for (PHINode *PN : PHIsToRemove) {
+    if (!PN->use_empty())
+      continue;
+    InsertedValues.erase(PN);
+    InsertedPostIncValues.erase(PN);
+    PN->eraseFromParent();
+  }
+
   return User->getOperand(OpIdx);
 }
 
