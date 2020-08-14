@@ -61,7 +61,7 @@ static bool checkColumnIsZero(ArrayRef<SmallVector<int64_t, 4>> matrix,
   return true;
 }
 
-/// Fill `row` with the coefficients of loopIVs in `expr`. Any constant terms
+/// Fills `row` with the coefficients of loopIVs in `expr`. Any constant terms
 /// encountered in `expr` are added to `constantVectorValue`. Every value in
 /// `operands` should be a loopIV or a terminal symbol.
 static void prepareCoeffientRow(AffineExpr &expr, SmallVector<int64_t, 4> &row,
@@ -79,7 +79,7 @@ static void prepareCoeffientRow(AffineExpr &expr, SmallVector<int64_t, 4> &row,
     AffineExpr rhs = addExpr.getRHS();
     unsigned lhsPosition = 0;
     unsigned rhsPosition = 0;
-    // Parse LHS part of affine access expr.
+    
     switch (lhs.getKind()) {
     case AffineExprKind::DimId: {
       auto dim = lhs.cast<AffineDimExpr>();
@@ -93,8 +93,7 @@ static void prepareCoeffientRow(AffineExpr &expr, SmallVector<int64_t, 4> &row,
     }
     if (row[lhsPosition] == 0 && !isConstSubExpr)
       row[lhsPosition] = 1;
-    // Parse RHS part of affine access expr. Again assume this sub-expr is also
-    // not a constant expr.
+    
     isConstSubExpr = false;
     switch (rhs.getKind()) {
     case AffineExprKind::DimId: {
@@ -103,7 +102,7 @@ static void prepareCoeffientRow(AffineExpr &expr, SmallVector<int64_t, 4> &row,
       break;
     }
     case AffineExprKind::Constant: {
-      // If the RHS is a constant, add this constant to B[l].
+      // If the RHS is a constant, add this constant to constantVectorValue.
       constantVectorValue += rhs.cast<AffineConstantExpr>().getValue();
       isConstSubExpr = true;
     }
@@ -117,7 +116,6 @@ static void prepareCoeffientRow(AffineExpr &expr, SmallVector<int64_t, 4> &row,
     AffineExpr lhs = mulExpr.getLHS();
     AffineExpr rhs = mulExpr.getRHS();
     unsigned dimIdPos = 0;
-    // Parse LHS part of affine binary expr.
     if (lhs.isa<AffineDimExpr>()) {
       auto dim = lhs.cast<AffineDimExpr>();
       dimIdPos = loopIndexMap[operands[dim.getPosition()]];
@@ -176,7 +174,6 @@ static void getAffineAccessMatrices(
     fullyComposeAffineMapAndOperands(&map, &operands);
     map = simplifyAffineMap(map);
     canonicalizeMapAndOperands(&map, &operands);
-    // Parse each map result to construct access matrices.
     ArrayRef<AffineExpr> mapResults = map.getResults();
     // Number of rows in an accessMatrix = Number of dimensions in the memref
     // object. Number of Columns = (noDimIDs + noSymbols).
@@ -184,20 +181,18 @@ static void getAffineAccessMatrices(
     constVector[srcOp].resize(mapResults.size());
     for (unsigned l = 0; l < mapResults.size(); l++) {
       // Parse the l-th map result(access expr for l-th dim of this memref) to
-      // get the l-th row of this access matrix.
+      // get the l-th row of this op's access matrix.
       AffineExpr mapResult = mapResults[l];
       loopAccessMatrices[srcOp][l].resize(std::max(
           AffineForOpLoopNestSize, map.getNumDims() + map.getNumSymbols()));
-      // Check if `mapResult` is a constant expr. If it is a constant expr, no
-      // need to walk it. Instead, add the value to constVector and leave
-      // the row vector to be zeroes.
+      // Check if `mapResult` is a constant expr. If yes, no need to walk it.
+      // Instead, add the value to constVector and leave the row unchanged.
       if (mapResult.isa<AffineConstantExpr>()) {
         auto constExpr = mapResult.cast<AffineConstantExpr>();
         constVector[srcOp][l] = constExpr.getValue();
       } else {
-        // Start parsing the mapResult.
         mapResult.walk([&](AffineExpr expr) {
-          // Each expr can in turn be a combination of many affine expressions.
+          // Each expr can be a combination of many affine expressions.
           prepareCoeffientRow(expr, loopAccessMatrices[srcOp][l],
                               constVector[srcOp][l], operands, loopIndexMap);
         });
