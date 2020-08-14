@@ -72,19 +72,17 @@ static void prepareCoeffientRow(AffineExpr &expr, SmallVector<int64_t, 4> &row,
                                 int64_t &constantVectorValue,
                                 ArrayRef<Value> operands,
                                 DenseMap<Value, unsigned> &loopIndexMap) {
-
+  // TODO: Implement support for terminal symbols in `expr`.
   switch (expr.getKind()) {
   case AffineExprKind::Add: {
     // Is this sub-expr a constant? If yes, no need to modify `row`. Start by
     // assuming the sub-expr is not a constant.
     bool isConstSubExpr = false;
-
     AffineBinaryOpExpr addExpr = expr.cast<AffineBinaryOpExpr>();
     AffineExpr lhs = addExpr.getLHS();
     AffineExpr rhs = addExpr.getRHS();
     unsigned lhsPosition = 0;
     unsigned rhsPosition = 0;
-
     // Parse LHS part of affine access expr.
     switch (lhs.getKind()) {
     case AffineExprKind::DimId: {
@@ -92,44 +90,28 @@ static void prepareCoeffientRow(AffineExpr &expr, SmallVector<int64_t, 4> &row,
       lhsPosition = loopIndexMap[operands[dim.getPosition()]];
       break;
     }
-    case AffineExprKind::SymbolId: {
-      auto symbol = lhs.cast<AffineSymbolExpr>();
-      // Symbolic identifiers come after all the dimensional identifiers
-      lhsPosition = noDimIDs + symbol.getPosition();
-      break;
-    }
     case AffineExprKind::Constant: {
-      int64_t consT = rhs.cast<AffineConstantExpr>().getValue();
-      constantVectorValue += consT;
+      constantVectorValue += rhs.cast<AffineConstantExpr>().getValue();
       isConstSubExpr = true;
     }
     }
-
     if (row[lhsPosition] == 0 && !isConstSubExpr)
       row[lhsPosition] = 1;
-
     // Parse RHS part of affine access expr. Again assume this sub-expr is also
     // not a constant expr.
     isConstSubExpr = false;
     switch (rhs.getKind()) {
     case AffineExprKind::DimId: {
-      auto dim = rhs.cast<AffineDimExpr>();
-      rhsPosition = loopIndexMap[operands[dim.getPosition()]];
-      break;
-    }
-    case AffineExprKind::SymbolId: {
-      auto symbol = rhs.cast<AffineSymbolExpr>();
-      rhsPosition = noDimIDs + symbol.getPosition();
+      auto dimExpr = rhs.cast<AffineDimExpr>();
+      rhsPosition = loopIndexMap[operands[dimExpr.getPosition()]];
       break;
     }
     case AffineExprKind::Constant: {
-      int64_t consT = rhs.cast<AffineConstantExpr>().getValue();
       // If the RHS is a constant, add this constant to B[l].
-      constantVectorValue += consT;
+      constantVectorValue += rhs.cast<AffineConstantExpr>().getValue();
       isConstSubExpr = true;
     }
     }
-
     if (row[rhsPosition] == 0 && !isConstSubExpr)
       row[rhsPosition] = 1;
     break;
@@ -138,30 +120,18 @@ static void prepareCoeffientRow(AffineExpr &expr, SmallVector<int64_t, 4> &row,
     AffineBinaryOpExpr mulExpr = expr.cast<AffineBinaryOpExpr>();
     AffineExpr lhs = mulExpr.getLHS();
     AffineExpr rhs = mulExpr.getRHS();
-    unsigned position = 0;
-
+    unsigned dimIdPos = 0;
     // Parse LHS part of affine binary expr.
     switch (lhs.getKind()) {
     case AffineExprKind::DimId: {
       auto dim = lhs.cast<AffineDimExpr>();
-      position = loopIndexMap[operands[dim.getPosition()]];
-      break;
-    }
-    case AffineExprKind::SymbolId: {
-      auto symbol = lhs.cast<AffineSymbolExpr>();
-      // Symbolic identifiers come after all the dimensional identifiers
-      position = noDimIDs + symbol.getPosition();
+      dimIdPos = loopIndexMap[operands[dim.getPosition()]];
       break;
     }
     }
-
     // RHS in this case should always be a constant.
-    switch (rhs.getKind()) {
-    case AffineExprKind::Constant: {
-      auto constExpr = rhs.cast<AffineConstantExpr>();
-      row[position] = constExpr.getValue();
-      break;
-    }
+    if (rhs.isa<AffineConstantExpr>()) {
+      row[dimIdPos] = rhs.cast<AffineConstantExpr>().getValue();
     }
     break;
   }
@@ -171,41 +141,21 @@ static void prepareCoeffientRow(AffineExpr &expr, SmallVector<int64_t, 4> &row,
     constantVectorValue += 0;
     break;
   }
-  case AffineExprKind::SymbolId: {
-    auto symbol = expr.cast<AffineDimExpr>();
-    row[noDimIDs + symbol.getPosition()] = 1;
-    constantVectorValue += 0;
-    break;
-  }
   case AffineExprKind::CeilDiv:
   case AffineExprKind::FloorDiv:
   case AffineExprKind::Mod: {
-    auto dim = expr.cast<AffineBinaryOpExpr>();
-    AffineExpr lhs = dim.getLHS();
-    AffineExpr rhs = dim.getRHS();
+    auto modExpr = expr.cast<AffineBinaryOpExpr>();
+    AffineExpr lhs = modExpr.getLHS();
+    AffineExpr rhs = modExpr.getRHS();
     switch (lhs.getKind()) {
     case AffineExprKind::DimId: {
       auto dim = lhs.cast<AffineDimExpr>();
       row[loopIndexMap[operands[dim.getPosition()]]] = 1;
       break;
     }
-    case AffineExprKind::SymbolId: {
-      auto symbol = lhs.cast<AffineSymbolExpr>();
-      // Symbolic identifiers come after all the dimensional identifiers
-      row[noDimIDs + symbol.getPosition()] = 1;
-      break;
     }
-    }
-    // RHS in this case is always a constant or a symbol. For constant, we
-    // already put a 1 for the loopIV (LHS).
-    switch (rhs.getKind()) {
-    case AffineExprKind::SymbolId: {
-      auto symbol = rhs.cast<AffineSymbolExpr>();
-      // Symbolic identifiers come after all the dimensional identifiers
-      row[noDimIDs + symbol.getPosition()] = 1;
-      break;
-    }
-    }
+    // RHS in this case is always a constant or a symbol. For a constant, we
+    // don't need to modify the access matrix.
   }
   }
 }
@@ -236,10 +186,8 @@ static void getAffineAccessMatrices(
     fullyComposeAffineMapAndOperands(&map, &operands);
     map = simplifyAffineMap(map);
     canonicalizeMapAndOperands(&map, &operands);
-
     // Parse each map result to construct access matrices.
     ArrayRef<AffineExpr> mapResults = map.getResults();
-
     // Number of rows in an accessMatrix = Number of dimensions in the memref
     // object. Number of Columns = (noDimIDs + noSymbols).
     loopAccessMatrices[srcOp].resize(mapResults.size());
@@ -250,7 +198,6 @@ static void getAffineAccessMatrices(
       AffineExpr mapResult = mapResults[l];
       loopAccessMatrices[srcOp][l].resize(std::max(
           AffineForOpLoopNestSize, map.getNumDims() + map.getNumSymbols()));
-
       // Check if `mapResult` is a constant expr. If it is a constant expr, no
       // need to walk it. Instead, add the value to constVector and leave
       // the row vector to be zeroes.
@@ -293,7 +240,6 @@ static void separateSiblingAffineForOps(AffineForOp &parentForOp,
   unsigned forOpAPosition = 0;
   llvm::SmallSet<unsigned, 8> siblingsIndices;
   unsigned index = 0;
-
   parentForOp.getOperation()->walk([&](AffineForOp op) {
     index++;
     if (op.getOperation() == forOpA.getOperation())
@@ -302,7 +248,6 @@ static void separateSiblingAffineForOps(AffineForOp &parentForOp,
       if (op.getOperation() == siblings[i].getOperation())
         siblingsIndices.insert(index);
   });
-
   // Walk the copy of parentOp to erase all siblings other than `forOpA`.
   index = 0;
   copyParentForOp.getOperation()->walk([&](AffineForOp op) {
@@ -310,7 +255,6 @@ static void separateSiblingAffineForOps(AffineForOp &parentForOp,
     if (index != forOpAPosition && siblingsIndices.count(index))
       op.getOperation()->erase();
   });
-
   // Erase `forOpA` from the original copy.
   forOpA.getOperation()->erase();
 }
@@ -356,7 +300,7 @@ void LoopInterchange::handleImperfectlyNestedAffineLoops(Operation &funcOp) {
 }
 
 /// Scan the loop nest rooted at `rootForOp` and collect all affine.load and
-/// affine.store ops. Fill \param [out] `loadAndStoreOps` with all such ops.
+/// affine.store ops. Fill `loadAndStoreOps` with all such ops.
 static void getAllLoadStores(AffineForOp rootForOp,
                              SmallVector<Operation *, 8> &loadAndStoreOps) {
   rootForOp.getOperation()->walk([&](Operation *op) {
@@ -366,10 +310,10 @@ static void getAllLoadStores(AffineForOp rootForOp,
   });
 }
 
-/// Stores in \param [out] `elementsSize` size of all memref types accessed by
-/// ops in `loadAndStoreOps`. These element sizes would later be used to check
-/// if two accesses are within a cache_line_size/element size distance apart for
-/// a useful locality.
+/// Fills `elementsSize` with size of element types of respective memrefs
+/// accessed by ops in `loadAndStoreOps`. These will be used to check if two
+/// accesses are within a cache_line_size/element_size distance apart for a
+/// useful locality.
 static void getElementsSize(SmallVector<Operation *, 8> &loadAndStoreOps,
                             DenseMap<Operation *, unsigned> &elementsSize) {
   MemRefType memrefType;
@@ -381,12 +325,17 @@ static void getElementsSize(SmallVector<Operation *, 8> &loadAndStoreOps,
       AffineStoreOp storeOp = cast<AffineStoreOp>(*op);
       memrefType = storeOp.getMemRefType();
     }
-    elementsSize[op] = getMemRefSizeInBytes(memrefType);
+    // If the memref has a static shape, obtain the element size. Otherwise
+    // consider a default value.
+    elementsSize[op] = memrefType.hasStaticShape()
+                           ? getMemRefSizeInBytes(memrefType).getValue() /
+                                 memrefType.getNumElements()
+                           : 8;
   }
 }
 
-/// \param [out] `validPermutation` gets filled with all valid loop interchange
-/// permutations of the loop nest rooted at `rootForOp` op.
+/// Fill `validPermutation` with all valid loop interchange permutations of the
+/// loop nest rooted at `rootForOp` op.
 /// [Theorem] A permutation of the loops in a perfect nest is legal if and only
 /// if the direction matrix, after the same permutation is applied to its
 /// columns, has no ">" direction as the leftmost non-"=" direction in any row.
@@ -401,14 +350,13 @@ static void getAllValidLoopInterchangePermutations(
   validPermutations.push_back(permutation);
   SmallVector<AffineForOp, 4> perfectLoopNest;
   getPerfectlyNestedLoops(perfectLoopNest, rootForOp);
-
   while (std::next_permutation(permutation.begin(), permutation.end()))
     if (isValidLoopInterchangePermutation(perfectLoopNest, permutation))
       validPermutations.push_back(permutation);
 }
 
 /// Calculates the loop-carried-dependence vector for the loop nest rooted at
-/// `rootForOp` op. \param [out] `loopCarriedDependenceVector` holds the result.
+/// `rootForOp` op. Result is stored in  `loopCarriedDependenceVector`.
 static void getLoopCarriedDependenceVector(
     AffineForOp &rootForOp, ArrayRef<Operation *> loadAndStoreOps,
     SmallVector<bool, 4> &loopCarriedDependenceVector, unsigned loopNestSize) {
@@ -416,7 +364,6 @@ static void getLoopCarriedDependenceVector(
   unsigned numOps = loadAndStoreOps.size();
   // Resize `loopCarriedDependenceVector` to fit entire loop nest.
   loopCarriedDependenceVector.resize(loopNestSize);
-
   for (unsigned i = 0; i < numOps; ++i) {
     Operation *srcOp = loadAndStoreOps[i];
     for (unsigned j = 0; j < numOps; ++j) {
@@ -448,7 +395,6 @@ static uint64_t getParallelismCost(ArrayRef<unsigned> perm,
                                    ArrayRef<unsigned> iterCounts) {
   uint64_t totalcost = 0;
   uint64_t thisLoopcost = 1;
-
   for (unsigned i = 0; i < perm.size(); i++) {
     if (!loopCarriedDV[perm[i]])
       continue;
@@ -474,10 +420,9 @@ static void insertIntoReferenceGroup(
   groupId[dstOp] = groupId[srcOp];
 }
 
-/// Groups each op in `loadAndStoreOps` into \param [out] `referenceGroups`
-/// depending on whether or not they exibit group-temporal or group-spatial
-/// reuse with respect to an affine.for op present at index `innermostIndex` in
-/// the original loop nest.
+/// Groups ops in `loadAndStoreOps` into `referenceGroups` based on whether or
+/// not they exibit group-temporal or group-spatial reuse with respect to an
+/// affine.for op present at `innermostIndex` in the original loop nest.
 ///
 /// Please refer Steve Carr et. al for a detailed description.
 /// https://dl.acm.org/doi/abs/10.1145/195470.195557
@@ -517,7 +462,6 @@ static void buildReferenceGroups(
     groupId[loadAndStoreOps[i]] = i;
     referenceGroups[i].insert(loadAndStoreOps[i]);
   }
-
   for (unsigned i = 0; i < numOps; ++i) {
     Operation *srcOp = loadAndStoreOps[i];
     MemRefAccess srcAccess(srcOp);
@@ -532,7 +476,6 @@ static void buildReferenceGroups(
         // equal. Only B should differ in last index.
         if (loopAccessMatrices[srcOp] != loopAccessMatrices[dstOp])
           continue;
-
         SmallVector<int64_t, 4> srcOpCV = constVector[srcOp];
         SmallVector<int64_t, 4> destOpCV = constVector[dstOp];
         bool onlyLastIndexVaries = true;
@@ -544,14 +487,12 @@ static void buildReferenceGroups(
         }
         if (!onlyLastIndexVaries)
           continue;
-
         // Difference in values in last index should be less than
         // cache_line_size/elementSize for a useful locality.
         unsigned elementSize = elementsSize[srcOp];
         if (!(abs(srcOpCV.back() - destOpCV.back()) <=
               cache_line_size / elementSize))
           continue;
-
         // Insert `dstOp` into the group of `srcOp`.
         insertIntoReferenceGroup(referenceGroups, groupId, srcOp, dstOp);
       } else {
@@ -590,8 +531,8 @@ static void buildReferenceGroups(
 }
 
 /// Calculates number of cache lines accessed by each affine.for op in the
-/// `loopNest` if each of those were considered the innermost loop. Final
-/// values are stored in \param [out] 'cacheLinesAccessCounts'.
+/// `loopNest` if that affine.for is considered the innermost loop. Final
+/// values are stored in 'cacheLinesAccessCounts'.
 ///
 /// Please refer Steve Carr et. al for a detailed description.
 /// https://dl.acm.org/doi/abs/10.1145/195470.195557
@@ -609,16 +550,13 @@ static void getCacheLineAccessCounts(
   SmallVector<llvm::SmallSet<Operation *, 8>, 8> refGroups;
   for (unsigned innerloop = 0; innerloop < loopNestSize; innerloop++) {
     AffineForOp forOp = loopNest[innerloop];
-
     // Build reference groups considering each `forOp` to be the innermost loop.
     buildReferenceGroups(loadAndStoreOps, loopAccessMatrices, constVector,
                          elementsSize, loopNestSize, innerloop + 1, refGroups);
-
     unsigned step = forOp.getStep();
     uint64_t trip =
         (forOp.getConstantUpperBound() - forOp.getConstantLowerBound()) / step +
         1;
-
     // `totalCacheLineCount` represents overall number of cache lines accessed
     // with this loop as the inner most loop.
     uint64_t totalCacheLineCount = 0;
@@ -702,10 +640,8 @@ static uint64_t getSpatialLocalityCost(
     ArrayRef<unsigned> loopIterCounts) {
 
   uint64_t auxiliaryCost = 0;
-
   // Product of iteration count of inner loops.
   uint64_t iterSubSpaceSize = 1;
-
   // Maximum cache lines accessed by any affine.for op in the loop nest. Helpful
   // in calculating sentinel - see below.
   unsigned maxCacheLinesAccessed = 0;
@@ -714,7 +650,6 @@ static uint64_t getSpatialLocalityCost(
     unsigned numberCacheLinesAccessed = cacheLineCounts[&loopNest[perm[i]]];
     if (numberCacheLinesAccessed > maxCacheLinesAccessed)
       maxCacheLinesAccessed = numberCacheLinesAccessed;
-
     auxiliaryCost += numberCacheLinesAccessed * iterSubSpaceSize;
     iterSubSpaceSize *= loopIterCounts[perm[i]];
   }
@@ -740,17 +675,15 @@ static uint64_t getSpatialLocalityCost(
   return sentinel - auxiliaryCost;
 }
 
-/// \param [out] `bestPerm` gets filled with the optimal permutation considering
-/// both the locality cost and the parallelism cost. If the current permutation
-/// is the best permutation for this loop nest, the method returns false.
+/// Fills `bestPerm` gets with the optimal permutation considering both the
+/// locality cost and the parallelism cost. If the current permutation is the
+/// best permutation for this loop nest, the method returns false.
 static bool getBestPermutation(SmallVector<AffineForOp, 4> &loopNest,
                                SmallVector<unsigned, 4> &loopIterationCounts,
                                DenseMap<Value, unsigned> &loopIndexMap,
                                SmallVector<unsigned, 4> &bestPerm) {
-
-  SmallVector<Operation *, 8> loadAndStoreOps;
   uint64_t minCost = UINT64_MAX;
-
+  SmallVector<Operation *, 8> loadAndStoreOps;
   // Get all affine.load and affine.store ops.
   getAllLoadStores(loopNest[0], loadAndStoreOps);
 
@@ -845,7 +778,6 @@ void runOnAffineLoopNest(SmallVector<AffineForOp, 4> &loopVector) {
   unsigned loopIndex = 0;
   // Iteration count for each affine.for in the loop nest.
   SmallVector<unsigned, 4> loopIterationCounts;
-
   for (auto &op : loopVector) {
     // Assign IDs to loop variables - used later to populate access-matrix
     // for each memref.
@@ -856,7 +788,6 @@ void runOnAffineLoopNest(SmallVector<AffineForOp, 4> &loopVector) {
         (op.getConstantUpperBound() - op.getConstantLowerBound()) /
         op.getStep());
   }
-
   SmallVector<unsigned, 4> bestPermutation;
   // `bestPermutation` returns false when the original permutation is the best
   // permutation.
@@ -868,11 +799,10 @@ void runOnAffineLoopNest(SmallVector<AffineForOp, 4> &loopVector) {
 }
 
 void LoopInterchange::runOnFunction() {
-  SmallVector<AffineForOp, 4> loopVector;
-
   Operation *function = getFunction().getOperation();
   handleImperfectlyNestedAffineLoops(*function);
 
+  SmallVector<AffineForOp, 4> loopVector;
   (*function).walk([&](AffineForOp op) {
     loopVector.push_back(op);
 
