@@ -63,8 +63,9 @@ These are Parallelism cost, Spatial locality cost and Temporal reuse cost.
 FinalCost = 100* ParallelismCost + SpatialLocalityCost + TemporalReuseCost
 
 We assume that the cost involved with parallelism is 100x more expensive than 
-those with locality cost. This assumption is fair since we know that synchronization 
-operations are more costly on multicores due to cache coherence policies.
+those with locality cost. This assumption is fair since we know that 
+synchronization operations are more costly on multicores due to cache coherence 
+policies.
 
 The costs are calculated as follows:
 
@@ -72,8 +73,8 @@ The costs are calculated as follows:
 
 The Spatial locality cost is based on size of the locality of each 
 forLoop. Some define it as number of cahce lines accessed in this for loop were 
-the innermost loop. A method for calculating these values are given in a paper by
-Steve Carr et al. [here](https://dl.acm.org/doi/abs/10.1145/195470.195557).
+the innermost loop. A method for calculating these values are given in a paper
+by Steve Carr et al. [here](https://dl.acm.org/doi/abs/10.1145/195470.195557).
 
 Once the locality information is available, we define the cost of a given 
 permutation as the sum of product of locality of each loop multiplied with the 
@@ -93,13 +94,13 @@ absolute quantity.
 The Temporal Reuse cost is based on the sum total number of reuses experienced
 by each memory access for a given permutation. For each permutation, we check 
 for each loop (starting from the innermost loop) if the column corresponding to
-that loop's IV is all zeros in the access matrix of any given load/store. If 
+that loop's IV is all zeros in the access matrix of any given load/store. If
 the column is all zeros, it means the same value is accessed over the entire 
 loop iteration - hence the reuse count increases by a factor of O(n). The same 
 procedure is repeated till we encounter a loop for which the column in access 
-matrix is non-zero. The reuse count stops there. No matter whether further loops
-have a all-zero column or not, the reuse will not take place once a non-zero 
-column has been encountered.
+matrix is non-zero. The reuse count stops there. No matter whether further
+loops have a all-zero column or not, the reuse will not take place once a non- 
+zero column has been encountered.
 
 Based on the total reuse count, we assign a cost to the permutation such that 
 maximal temporal reuse corresponds to a minimum cost.
