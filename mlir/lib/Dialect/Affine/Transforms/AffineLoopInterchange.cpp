@@ -646,8 +646,9 @@ static bool getBestPermutation(ArrayRef<AffineForOp> loopNest,
   // nest. The access matrices are needed to get both temporal reuse cost and
   // spatial reuse cost.
   //
-  // For each memref access function Ax+b, this is  the collection of all A's
-  // indexed by their respective affine.load/affine.store op.
+  // For each memref access function Ax+b, this is  the collection of all As 
+  // and b-vectors indexed by their respective affine.load/affine.store op.
+  // The b-vectors are stored in the last column of each access matrix.
   DenseMap<Operation *, SmallVector<SmallVector<int64_t, 4>, 4>>
       loopAccessMatrices;
   getAffineAccessMatrices(loopNest[0], loadAndStoreOps, loopIndexMap,
