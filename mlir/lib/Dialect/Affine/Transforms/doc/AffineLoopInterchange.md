@@ -35,7 +35,7 @@ an estimate on the total number of cache lines that will be accessed during the
 execution if the loop nest was arranged in this permutation.
 
  After the best permutation has been identified, it then calls the 
-`permuteLoops` function defined in `LoopUtils.h` for carrying out the loop 
+`permuteLoops` function declared in `LoopUtils.h` for carrying out the loop 
 interchange.
 
 Please note: In case of large loop nests having depth more than four, we 
