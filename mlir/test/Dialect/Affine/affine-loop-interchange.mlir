@@ -11,8 +11,12 @@ func @interchange_for_spatial_locality(%A: memref<2048x2048xf64>) {
 }
 
 // Interchanged for spatial locality.
-// CHECK:       affine.load %arg0[%arg1, %arg2] : memref<2048x2048xf64>
-// CHECK-NEXT:  affine.store %{{.*}}, %arg0[%arg1, %arg2] : memref<2048x2048xf64>
+// CHECK:       affine.for %[[IV0:.*]] = 0 to 2048 {
+// CHECK-NEXT:    affine.for %[[IV1:.*]] = 0 to 2048 {
+// CHECK-NEXT:      affine.load %{{.*}}[%[[IV0]], %[[IV1]]] : memref<2048x2048xf64>
+// CHECK-NEXT:      affine.store %{{.*}}, %{{.*}}[%[[IV0]], %[[IV1]]] : memref<2048x2048xf64>
+// CHECK-NEXT:    }
+// CHECK-NEXT:  }
 
 // -----
 
@@ -27,9 +31,13 @@ func @interchange_for_spatial_temporal(%A: memref<2048xf64>) {
   return
 }
 // More reuse with %j, %i order.
-// CHECK:       affine.load %arg0[%arg1] : memref<2048xf64>
-// CHECK-NEXT:  affine.load %arg0[%arg1] : memref<2048xf64>
-// CHECK-NEXT:  affine.load %arg0[%arg2] : memref<2048xf64>
+// CHECK:       affine.for %[[IV0:.*]] = 0 to 2048 {
+// CHECK-NEXT:    affine.for %[[IV1:.*]] = 0 to 2048 {
+// CHECK-NEXT:      %{{.*}} = affine.load %{{.*}}[%[[IV0]]] : memref<2048xf64>
+// CHECK-NEXT:      affine.load %{{.*}}[%[[IV0]]] : memref<2048xf64>
+// CHECK-NEXT:      affine.load %{{.*}}[%[[IV1]]] : memref<2048xf64>
+// CHECK-NEXT:    }
+// CHECK-NEXT:  }
 
 // -----
 
@@ -52,18 +60,24 @@ func @matmul_ijk(%A: memref<2048x2048xf64>, %B: memref<2048x2048xf64>, %C: memre
 
 // Test whether the ikj permutation has been found.
 
-// CHECK:      affine.load %arg0[%arg3, %arg4] : memref<2048x2048xf64>
-// CHECK-NEXT: affine.load %arg1[%arg4, %arg5] : memref<2048x2048xf64>
-// CHECK-NEXT: affine.load %arg2[%arg3, %arg5] : memref<2048x2048xf64>
-// CHECK-NEXT: mulf %{{.*}}, %{{.*}} : f64
-// CHECK-NEXT: addf %{{.*}}, %{{.*}} : f64
-// CHECK-NEXT: affine.store %{{.*}}, %arg2[%arg3, %arg5] : memref<2048x2048xf64>
+// CHECK:      affine.for %[[IV0:.*]] = 0 to 2048 {
+// CHECK-NEXT:    affine.for %[[IV1:.*]] = 0 to 2048 {
+// CHECK-NEXT:      affine.for %[[IV2:.*]] = 0 to 2048 {
+// CHECK-NEXT:        affine.load %{{.*}}[%[[IV0]], %[[IV1]]] : memref<2048x2048xf64>
+// CHECK-NEXT:        affine.load %{{.*}}[%[[IV1]], %[[IV2]]] : memref<2048x2048xf64>
+// CHECK-NEXT:        affine.load %{{.*}}[%[[IV0]], %[[IV2]]] : memref<2048x2048xf64>
+// CHECK-NEXT:        mulf %{{.*}}, %{{.*}} : f64
+// CHECK-NEXT:        addf %{{.*}}, %{{.*}} : f64
+// CHECK-NEXT:        affine.store %{{.*}}, %{{.*}}[%[[IV0]], %[[IV2]]] : memref<2048x2048xf64>
+// CHECK-NEXT:      }
+// CHECK-NEXT:    }
+// CHECK-NEXT:  }
 
 // -----
 
 // CHECK-LABEL: func @interchange_for_outer_parallelism
 func @interchange_for_outer_parallelism(%A: memref<2048x2048x2048xf64>) {
-  affine.for %i = 1 to 2048 {
+  affine.for %i = 0 to 2048 {
     affine.for %j = 0 to 2048 {
       affine.for %k = 0 to 2048 {
         %v = affine.load %A[%i, %j, %k] : memref<2048x2048x2048xf64>
@@ -75,9 +89,15 @@ func @interchange_for_outer_parallelism(%A: memref<2048x2048x2048xf64>) {
   return
 }
 // %j should become outermost - provides outer parallelism and locality.
-// CHECK-NEXT: affine.load %arg0[%arg2, %arg1, %arg3]
-// CHECK-NEXT: mulf %{{.*}}, %{{.*}} : f64
-// CHECK-NEXT: affine.store %{{.*}}, %arg0[%arg2 - 1, %arg1, %arg3]
+// CHECK:       affine.for %[[IV0:.*]] = 0 to 2048 {
+// CHECK-NEXT:    affine.for %[[IV1:.*]] = 0 to 2048 {
+// CHECK-NEXT:      affine.for %[[IV2:.*]] = 0 to 2048 {
+// CHECK-NEXT:        %{{.*}} = affine.load %{{.*}}[%[[IV1]], %[[IV0]], %[[IV2]]] : memref<2048x2048x2048xf64>
+// CHECK-NEXT:        %{{.*}} = mulf %{{.*}}, %{{.*}} : f64
+// CHECK-NEXT:        affine.store %{{.*}}, %{{.*}}[%[[IV1]] - 1, %[[IV0]], %[[IV2]]] : memref<2048x2048x2048xf64>
+// CHECK-NEXT:      }
+// CHECK-NEXT:    }
+// CHECK-NEXT:  }
 
 // -----
 
@@ -97,8 +117,11 @@ func @test_group_reuse(%A: memref<2048x2048xf64>, %B: memref<?x?xf64>, %C: memre
   return
 }
 // Interchanged for better reuse.
-// CHECK: affine.store %{{.*}}, %{{.*}}[%arg4, %arg3] : memref<2048x2048xf64>
-// CHECK: affine.store %{{.*}}, %{{.*}}[%arg3, %arg4] : memref<?x?xf64>
+// CHECK:       affine.for %[[IV0:.*]] = 0 to 2048 {
+// CHECK-NEXT:    affine.for %[[IV1:.*]] = 0 to 2048 {
+// CHECK-NEXT:      %{{.*}} = affine.load %{{.*}}[%[[IV1]], %[[IV0]]] : memref<2048x2048xf64>
+// CHECK:           affine.store %{{.*}}, %{{.*}}[%[[IV1]], %[[IV0]]] : memref<?x?xf64>
+// CHECK:           affine.store %{{.*}}, %{{.*}}[%[[IV0]], %[[IV1]]] : memref<?x?xf64>
 
 // -----
 
@@ -117,7 +140,9 @@ func @interchange_invalid(%A: memref<2048x2048xf64>) {
 }
 
 // Interchange is invalid.
-// CHECK: affine.store %{{.*}}[%arg1, %arg2] : memref<2048x2048xf64>
+// CHECK:       affine.for %[[IV0:.*]] = 0 to 2048 {
+// CHECK-NEXT:    affine.for %[[IV1:.*]] = 0 to 2048 {
+// CHECK:         affine.store %{{.*}}, %{{.*}}[%[[IV0]], %[[IV1]]] : memref<2048x2048xf64>
 
 // -----
 
@@ -129,14 +154,17 @@ func @interchange_for_spatial_locality_mod(%A: memref<2048x2048x2048xf64>) {
       affine.for %k = 0 to 2048 {
         %v = affine.load %A[%i mod 2, %k, %j] : memref<2048x2048x2048xf64>
         affine.store %v, %A[%i mod 2, %k, %j] : memref<2048x2048x2048xf64>
-        // Interchanged for spatial locality.
-        // CHECK:       affine.load %arg0[%{{.*}} mod 2, %arg1, %arg3] : memref<2048x2048x2048xf64>
-        // CHECK-NEXT:  affine.store %{{.*}}, %arg0[%{{.*}} mod 2, %arg1, %arg3] : memref<2048x2048x2048xf64>
       }
     }
   }
   return
 }
+// Interchanged for spatial locality.
+// CHECK:       affine.for %[[IV0:.*]] = 0 to 2048 {
+// CHECK-NEXT:    affine.for %[[IV1:.*]] = 0 to 2048 {
+// CHECK-NEXT:      affine.for %[[IV2:.*]] = 0 to 2048 {
+// CHECK-NEXT:        %{{.*}} = affine.load %{{.*}}[%[[IV1]] mod 2, %[[IV0]], %[[IV2]]] : memref<2048x2048x2048xf64>
+// CHECK-NEXT:        affine.store %{{.*}}, %{{.*}}[%[[IV1]] mod 2, %[[IV0]], %[[IV2]]] : memref<2048x2048x2048xf64>
 
 // -----
 
@@ -151,8 +179,10 @@ func @invalid_loop_interchange(%A: memref<2048x2048xf64>) {
   }
   return
 }
-// CHECK: affine.load %arg0[%arg2 + 1, %arg1 -1] : memref<2048x2048xf64>
-// CHECK-NEXT: affine.store %{{.*}}, %arg0[%arg2, %arg1] : memref<2048x2048x64>
+// CHECK:       affine.for %[[IV0:.*]] = 0 to 2048 {
+// CHECK-NEXT:    affine.for %[[IV1:.*]] = 0 to 2048 {
+// CHECK-NEXT:      %{{.*}} = affine.load %{{.*}}[%[[IV1]] + 1, %[[IV0]] - 1] : memref<2048x2048xf64>
+// CHECK-NEXT:      affine.store %{{.*}}, %{{.*}}[%[[IV1]], %[[IV0]]] : memref<2048x2048xf64>
 
 // -----
 
@@ -177,7 +207,7 @@ func @if_else(%A: memref<2048x2048xf64>) {
 
 // -----
 
-// Test case with dynamic loop bounds
+// Test case with dynamic loop bounds. The pass should do nothing.
 
 func @non_rectangular_loopnest(%A: memref<2048x2048xf64>) {
   affine.for %i = 0 to 2048 {
@@ -206,14 +236,14 @@ func @imperfect_nest(%A: memref<2048x2048xf64>) {
   }
   return
 }
-// CHECK:      for %{{.*}} = 0 to 1024 {
-// CHECK-NEXT:   for %{{.*}} = 0 to 2048 {
-// CHECK-NEXT:     affine.store %{{.*}}, %arg0[%arg1, %arg2]
+// CHECK:      for %[[IV0.*]] = 0 to 1024 {
+// CHECK-NEXT:   for %[[IV1.*]] = 0 to 2048 {
+// CHECK-NEXT:     affine.store %{{.*}}, %{{.*}}[%[[IV0]], %[[IV1]]]
 // CHECK-NEXT:   }
 // CHECK-NEXT: }
-// CHECK-NEXT: for %{{.*}} = 1024 to 2048 {
-// CHECK-NEXT:   for %{{.*}} = 0 to 2048 {
-// CHECK-NEXT:      affine.store %{{.*}}, %arg0[%arg1, %arg2]
+// CHECK-NEXT: for %[[IV0.*]] = 1024 to 2048 {
+// CHECK-NEXT:   for %[[IV1.*]] = 0 to 2048 {
+// CHECK-NEXT:      affine.store %{{.*}}, %{{.*}}[%[[IV0]], %[[IV1]]]
 // CHECK-NEXT:   }
 // CHECK-NEXT: }
 
@@ -243,6 +273,30 @@ func @multilevel_imperfect_nest(%A: memref<2048x2048xf64>) {
   }
   return
 }
+// CHECK:       affine.for %[[IV0:.*]] = 0 to 1024 {
+// CHECK-NEXT:      affine.for %[[IV1:.*]] = 0 to 2048 {
+// CHECK-NEXT:        affine.store %{{.*}}, %{{.*}}[%[[IV0]], %[[IV1]]] : memref<2048x2048xf64>
+// CHECK-NEXT:      }
+// CHECK-NEXT:    }
+// CHECK-NEXT:    affine.for %[[IV0:.*]] = 1024 to 2048 {
+// CHECK-NEXT:      affine.for %[[IV1:.*]] = 0 to 2048 {
+// CHECK-NEXT:        affine.store %{{.*}}, %{{.*}}[%[[IV0]], %[[IV1]]] : memref<2048x2048xf64>
+// CHECK-NEXT:      }
+// CHECK-NEXT:    }
+// CHECK-NEXT:    affine.for %[[IV0:.*]] = 1024 to 2048 {
+// CHECK-NEXT:      affine.for %[[IV1:.*]] = 0 to 256 {
+// CHECK-NEXT:        affine.for %[[IV2:.*]] = 0 to 2048 {
+// CHECK-NEXT:          affine.store %{{.*}}, %{{.*}}[%[[IV0]], %[[IV1]]] : memref<2048x2048xf64>
+// CHECK-NEXT:        }
+// CHECK-NEXT:      }
+// CHECK-NEXT:    }
+// CHECK-NEXT:    affine.for %[[IV0:.*]] = 256 to 512 {
+// CHECK-NEXT:      affine.for %[[IV1:.*]] = 0 to 2048 {
+// CHECK-NEXT:        affine.for %[[IV2:.*]] = 1024 to 2048 {
+// CHECK-NEXT:          affine.store %{{.*}}, %{{.*}}[%[[IV0]], %[[IV1]]] : memref<2048x2048xf64>
+// CHECK-NEXT:        }
+// CHECK-NEXT:      }
+// CHECK-NEXT:    }
 
 // -----
 
@@ -251,10 +305,14 @@ func @multi_nest_seq(%A: memref<2048x2048xf64>, %B: memref<2048x2048xf64>, %C: m
     affine.for %j = 0 to 2048 {
       %v = affine.load %A[%j, %i] : memref<2048x2048xf64>
       affine.store %v, %A[%j, %i] : memref<2048x2048xf64>
-      // CHECK:       affine.load %arg0[%arg3, %arg4] : memref<2048x2048xf64>
-      // CHECK-NEXT:  affine.store %{{.*}}, %arg0[%arg3, %arg4] : memref<2048x2048xf64>
     }
   }
+  // CHECK:     affine.for %[[IV0:.*]] = 0 to 2048 {
+  // CHECK-NEXT: affine.for %[[IV1:.*]] = 0 to 2048 {
+  // CHECK-NEXT:    %{{.*}} = affine.load %{{.*}}[%[[IV0]], %[[IV1]]] : memref<2048x2048xf64>
+  // CHECK-NEXT:    affine.store %{{.*}}, %{{.*}}[%[[IV0]], %[[IV1]]] : memref<2048x2048xf64>
+  // CHECK-NEXT:  }
+  // CHECK-NEXT:}
 
   affine.for %i = 0 to 2048 {
     affine.for %j = 0 to 2048 {
@@ -268,12 +326,18 @@ func @multi_nest_seq(%A: memref<2048x2048xf64>, %B: memref<2048x2048xf64>, %C: m
       }
     }
   }
-  // CHECK:      affine.load %arg0[%arg3, %arg4] : memref<2048x2048xf64>
-  // CHECK-NEXT: affine.load %arg1[%arg4, %arg5] : memref<2048x2048xf64>
-  // CHECK-NEXT: affine.load %arg2[%arg3, %arg5] : memref<2048x2048xf64>
-  // CHECK-NEXT: mulf
-  // CHECK-NEXT: addf
-  // CHECK-NEXT: affine.store %{{.*}}, %arg2[%arg3, %arg5] : memref<2048x2048xf64>
+// CHECK:      affine.for %[[IV0:.*]] = 0 to 2048 {
+// CHECK-NEXT:    affine.for %[[IV1:.*]] = 0 to 2048 {
+// CHECK-NEXT:      affine.for %[[IV2:.*]] = 0 to 2048 {
+// CHECK-NEXT:        affine.load %{{.*}}[%[[IV0]], %[[IV1]]] : memref<2048x2048xf64>
+// CHECK-NEXT:        affine.load %{{.*}}[%[[IV1]], %[[IV2]]] : memref<2048x2048xf64>
+// CHECK-NEXT:        affine.load %{{.*}}[%[[IV0]], %[[IV2]]] : memref<2048x2048xf64>
+// CHECK-NEXT:        mulf %{{.*}}, %{{.*}} : f64
+// CHECK-NEXT:        addf %{{.*}}, %{{.*}} : f64
+// CHECK-NEXT:        affine.store %{{.*}}, %{{.*}}[%[[IV0]], %[[IV2]]] : memref<2048x2048xf64>
+// CHECK-NEXT:      }
+// CHECK-NEXT:    }
+// CHECK-NEXT:  }
   return
 }
 
