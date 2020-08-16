@@ -35,7 +35,8 @@ struct LoopInterchange : public AffineLoopInterchangeBase<LoopInterchange> {
   void handleImperfectlyNestedAffineLoops(Operation &funcOp);
   void runOnAffineLoopNest(SmallVector<AffineForOp, 4> &loopVector);
 
-  /// Default cache line size(in bytes) if nothing is provided in pass option.
+  /// Default cache line size(in bytes) if nothing is provided in the pass
+  /// option.
   constexpr static unsigned kCacheLineSize = 64;
 
   /// Default element size if the memref does not have a static shape.
