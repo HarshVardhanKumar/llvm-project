@@ -39,7 +39,7 @@ struct LoopInterchange : public AffineLoopInterchangeBase<LoopInterchange> {
   /// option.
   constexpr static unsigned kCacheLineSize = 64;
 
-  /// Default element size if the memref does not have a static shape.
+  /// Default element size to use if the memref does not have a static shape.
   constexpr static unsigned kDefaultEltSize = 8;
 };
 } // namespace
