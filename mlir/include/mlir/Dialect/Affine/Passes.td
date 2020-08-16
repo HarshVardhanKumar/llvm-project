@@ -50,11 +50,11 @@ def AffineLoopInvariantCodeMotion
 
 def AffineLoopInterchange
     : FunctionPass<"affine-loop-interchange">{
-  let summary = "Performs loop interchange on all the affine loopnests to"
-                "improve locality and parallelism for multicores.";
+  let summary = "Performs loop interchange on all the affine loop nests"
+                " to improve locality and parallelism for multicores.";
   let constructor = "mlir::createAffineLoopInterchangePass()";
   let options = [
-      Option<"cacheLineSizeInBytes", "cache-line-size", "uint64_t", "64",
+    Option<"cacheLineSizeInBytes", "cache-line-size", "uint64_t", /*default=*/"64",
              "Set size of a cache line in bytes">,
   ];
 }
