@@ -8,9 +8,9 @@
 //
 // This file implements a loop interchange pass that optimizes for locality
 // (spatial and temporal - both self and group) and parallelism for multicores,
-// so as to minimize the frequence of synchronization. The pass works for both
-// perfectly nested and implerfectly nested loops (any level of nesting).
-// However in presence of affine.if statements and/or non-rectangular iteration
+// to minimize the frequency of synchronization. The pass works for both
+// perfectly nested and imperfectly nested loops (any level of nesting). However
+// in the presence of affine.if statements and/or non-rectangular iteration
 // space, the pass simply bails out - leaving the original loop nest unchanged.
 // The pass is triggered by the command line flag -affine-loop-interchange.
 //
@@ -26,6 +26,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include <algorithm>
 #include <cmath>
+#include <numeric>
 
 using namespace mlir;
 namespace {
@@ -33,16 +34,16 @@ struct LoopInterchange : public AffineLoopInterchangeBase<LoopInterchange> {
   void runOnFunction() override;
   void handleImperfectlyNestedAffineLoops(Operation &funcOp);
 };
-}
+} // namespace
 
-/// Returns True if any affine.if op found in the loop nest rooted at `forOp`
+/// Returns true if any affine.if op found in the loop nest rooted at `forOp`
 static bool hasAffineIfStatement(AffineForOp &forOp) {
   auto walkResult =
       forOp.walk([&](AffineIfOp op) { return WalkResult::interrupt(); });
   return walkResult.wasInterrupted();
 }
 
-/// Checks if this `loopNest` has a rectangular shaped iteration space.
+/// Checks if this `loopNest` has a rectangular-shaped iteration space.
 static bool isRectangularAffineForLoopNest(ArrayRef<AffineForOp> loopNest) {
   for (AffineForOp forOp : loopNest) {
     if (!forOp.hasConstantUpperBound() || !forOp.hasConstantLowerBound())
@@ -79,33 +80,24 @@ static void prepareCoeffientRow(AffineExpr &expr, SmallVector<int64_t, 4> &row,
     AffineExpr rhs = addExpr.getRHS();
     unsigned lhsPosition = 0;
     unsigned rhsPosition = 0;
-    
-    switch (lhs.getKind()) {
-    case AffineExprKind::DimId: {
-      auto dim = lhs.cast<AffineDimExpr>();
-      lhsPosition = loopIndexMap[operands[dim.getPosition()]];
-      break;
-    }
-    case AffineExprKind::Constant: {
-      constantVectorValue += rhs.cast<AffineConstantExpr>().getValue();
+
+    if (lhs.isa<AffineDimExpr>()) {
+      auto dimExpr = lhs.cast<AffineDimExpr>();
+      lhsPosition = loopIndexMap[operands[dimExpr.getPosition()]];
+    } else if (lhs.isa<AffineConstantExpr>()) {
+      constantVectorValue += lhs.cast<AffineConstantExpr>().getValue();
       isConstSubExpr = true;
-    }
     }
     if (row[lhsPosition] == 0 && !isConstSubExpr)
       row[lhsPosition] = 1;
-    
+
     isConstSubExpr = false;
-    switch (rhs.getKind()) {
-    case AffineExprKind::DimId: {
+    if (rhs.isa<AffineDimExpr>()) {
       auto dimExpr = rhs.cast<AffineDimExpr>();
       rhsPosition = loopIndexMap[operands[dimExpr.getPosition()]];
-      break;
-    }
-    case AffineExprKind::Constant: {
-      // If the RHS is a constant, add this constant to constantVectorValue.
+    } else if (rhs.isa<AffineConstantExpr>()) {
       constantVectorValue += rhs.cast<AffineConstantExpr>().getValue();
       isConstSubExpr = true;
-    }
     }
     if (row[rhsPosition] == 0 && !isConstSubExpr)
       row[rhsPosition] = 1;
@@ -137,21 +129,18 @@ static void prepareCoeffientRow(AffineExpr &expr, SmallVector<int64_t, 4> &row,
   case AffineExprKind::Mod: {
     auto modExpr = expr.cast<AffineBinaryOpExpr>();
     AffineExpr lhs = modExpr.getLHS();
-    AffineExpr rhs = modExpr.getRHS();
     if (lhs.isa<AffineDimExpr>()) {
       auto dim = lhs.cast<AffineDimExpr>();
       row[loopIndexMap[operands[dim.getPosition()]]] = 1;
     }
-    // RHS in this case is always a constant or a symbol. For a constant, we
-    // don't need to modify the access matrix.
   }
   }
 }
 
-/// For a memref access function AX+B, it calculates both A and B and stores
-/// to `loopAccessMatrices` (collection of As) and `constVector`(collection of
-/// Bs). The param `loopIndexMap` is used to locate position for coefficients of
-/// loopIVs in each row of matrix A.
+/// For a memref access function Ax+b, it calculates both A and b and stores
+/// these to `loopAccessMatrices`(collection of As) and `constVector`(b)
+/// The param `loopIndexMap` is used for getting the position for coefficients
+/// of loopIVs (vector x in Ax+b) in each row of matrix A.
 static void getAffineAccessMatrices(
     AffineForOp &rootForOp, SmallVector<Operation *, 8> &loadAndStoreOps,
     DenseMap<Value, unsigned> &loopIndexMap,
@@ -186,7 +175,7 @@ static void getAffineAccessMatrices(
       loopAccessMatrices[srcOp][l].resize(std::max(
           AffineForOpLoopNestSize, map.getNumDims() + map.getNumSymbols()));
       // Check if `mapResult` is a constant expr. If yes, no need to walk it.
-      // Instead, add the value to constVector and leave the row unchanged.
+      // Instead, add the value to the constVector and leave the row unchanged.
       if (mapResult.isa<AffineConstantExpr>()) {
         auto constExpr = mapResult.cast<AffineConstantExpr>();
         constVector[srcOp][l] = constExpr.getValue();
@@ -201,7 +190,7 @@ static void getAffineAccessMatrices(
   }
 }
 
-/// Separates `forOpA` from its siblings. After the separation,`forOpA` receives
+/// Separates `forOpA` from its siblings. After separation, `forOpA` receives
 /// a copy of its parent independent from other siblings. A loop nest such as:
 /// \code
 ///     parent{forOpA, forOpB, forOpC}
@@ -210,9 +199,8 @@ static void getAffineAccessMatrices(
 /// \code
 ///     parent{forOpA}, parent{forOpB, forOpC}
 /// \endcode
-static void separateSiblingAffineForOps(AffineForOp &parentForOp,
-                                        AffineForOp &forOpA,
-                                        SmallVector<AffineForOp, 4> &siblings) {
+static void separateSiblingLoops(AffineForOp &parentForOp, AffineForOp &forOpA,
+                                 SmallVector<AffineForOp, 4> &siblings) {
 
   OpBuilder builder(parentForOp.getOperation()->getBlock(),
                     std::next(Block::iterator(parentForOp)));
@@ -244,7 +232,7 @@ static void separateSiblingAffineForOps(AffineForOp &parentForOp,
   forOpA.getOperation()->erase();
 }
 
-/// Converts all imperfectly nested loop nests in `funcOp` to perfectly 
+/// Converts all imperfectly nested loop nests in `funcOp` to perfectly
 /// nested loop nests by loop splitting.
 void LoopInterchange::handleImperfectlyNestedAffineLoops(Operation &funcOp) {
   SmallVector<AffineForOp, 4> loopNest;
@@ -265,12 +253,12 @@ void LoopInterchange::handleImperfectlyNestedAffineLoops(Operation &funcOp) {
     });
     // Separate one of the sibling at a time.
     for (auto &loopNest : forTree) {
-      // This loop nest has no sibling problem. Check the next loop nest.
+      // This loop nest has no siblings problem. Check the next loop nest.
       if (loopNest.second.size() < 2)
         continue;
       oneChild = false;
-      separateSiblingAffineForOps(forOperations[loopNest.first],
-                                  loopNest.second.back(), loopNest.second);
+      separateSiblingLoops(forOperations[loopNest.first],
+                           loopNest.second.back(), loopNest.second);
       // We need to walk the function again since the structure of loop nests
       // within the funcOp body has changed.
       break;
@@ -293,12 +281,15 @@ static void getAllLoadStores(AffineForOp rootForOp,
   });
 }
 
-/// Fills `elementsSize` with size of element types of respective memrefs
-/// accessed by respective ops in `loadAndStoreOps`. These will be used to 
+/// Fills `elementsSize` with the size of element types of respective memrefs
+/// accessed by the ops in `loadAndStoreOps`. These will be later used to
 /// check if two accesses are within a cache_line_size/element_size distance
 /// apart for a useful locality.
 static void getElementsSize(SmallVector<Operation *, 8> &loadAndStoreOps,
                             DenseMap<Operation *, unsigned> &elementsSize) {
+  // Assumption: In cases where element size is difficult to obtain, assume a
+  // default value of 8 bytes.
+  constexpr unsigned defaultEltSize = 8;
   MemRefType memrefType;
   for (Operation *op : loadAndStoreOps) {
     if (isa<AffineLoadOp>(op)) {
@@ -308,48 +299,25 @@ static void getElementsSize(SmallVector<Operation *, 8> &loadAndStoreOps,
       AffineStoreOp storeOp = cast<AffineStoreOp>(*op);
       memrefType = storeOp.getMemRefType();
     }
-    // If the memref has a static shape, obtain the element size. Otherwise
-    // consider a default value.
     elementsSize[op] = memrefType.hasStaticShape()
                            ? getMemRefSizeInBytes(memrefType).getValue() /
                                  memrefType.getNumElements()
-                           : 8;
+                           : defaultEltSize;
   }
 }
 
-/// Fills `validPermutations` with all valid loop interchange permutations of the
-/// loop nest rooted at `rootForOp`.
-/// [Theorem] A permutation of the loops in a perfect nest is legal if and only
-/// if the direction matrix, after the same permutation is applied to its
-/// columns, has no ">" direction as the leftmost non-"=" direction in any row.
-static void getAllValidLoopInterchangePermutations(
-    AffineForOp &rootForOp, unsigned noLoopsInNest,
-    SmallVector<SmallVector<unsigned, 4>, 8> &validPermutations) {
-
-  SmallVector<unsigned, 4> permutation;
-  for (unsigned i = 0; i < noLoopsInNest; i++)
-    permutation.push_back(i);
-
-  validPermutations.push_back(permutation);
-  SmallVector<AffineForOp, 4> perfectLoopNest;
-  getPerfectlyNestedLoops(perfectLoopNest, rootForOp);
-  while (std::next_permutation(permutation.begin(), permutation.end()))
-    if (isValidLoopInterchangePermutation(perfectLoopNest, permutation))
-      validPermutations.push_back(permutation);
-}
-
-/// Calculates loop-carried-dependence vector for this loop nest rooted at
-/// `rootForOp`. Result is stored in  `loopCarriedDependenceVector`.
+/// Calculates the loop-carried-dependence vector for this loop nest rooted at
+/// `rootForOp`. A value `true` at i-th index means that loop at depth i in the
+/// loop nest carries a dependence.
 static void getLoopCarriedDependenceVector(
     AffineForOp &rootForOp, ArrayRef<Operation *> loadAndStoreOps,
-    SmallVector<bool, 4> &loopCarriedDependenceVector, unsigned loopNestSize) {
+    unsigned loopNestSize, SmallVector<bool, 4> &loopCarriedDependenceVector) {
 
-  unsigned numOps = loadAndStoreOps.size();
-  // Resize `loopCarriedDependenceVector` to fit entire loop nest.
+  // Resize the `loopCarriedDependenceVector` to fit entire loop nest.
   loopCarriedDependenceVector.resize(loopNestSize);
-  for (unsigned i = 0; i < numOps; ++i) {
+  for (unsigned i = 0; i < loadAndStoreOps.size(); ++i) {
     Operation *srcOp = loadAndStoreOps[i];
-    for (unsigned j = 0; j < numOps; ++j) {
+    for (unsigned j = 0; j < loadAndStoreOps.size(); ++j) {
       Operation *dstOp = loadAndStoreOps[j];
       for (unsigned depth = 1; depth <= loopNestSize + 1; ++depth) {
         MemRefAccess srcAccess(srcOp), dstAccess(dstOp);
@@ -389,7 +357,52 @@ static uint64_t getParallelismCost(ArrayRef<unsigned> perm,
   return totalcost;
 }
 
-/// Removes `dstOp` from its current group and inserts it into `srcOp's`
+/// Calculates the sentinel values for calculation of spatial and temporal
+/// locality costs.
+static void calculateSentinels(ArrayRef<unsigned> loopIterCounts,
+                               uint64_t maxCacheLinesAccessed,
+                               uint64_t &spatialSentinel,
+                               uint64_t &temporalSentinel) {
+  uint64_t iterationSubSpace = 1;
+  for (auto loopIterC : loopIterCounts) {
+    spatialSentinel += maxCacheLinesAccessed * iterationSubSpace;
+    temporalSentinel *= loopIterC;
+    iterationSubSpace *= loopIterC;
+  }
+}
+
+/// Calculates a representative temporal reuse cost for a given permutation of
+/// the loop nest. A lower value returned means higher temporal reuse.
+static uint64_t getTemporalReuseCost(
+    ArrayRef<unsigned> permutation, ArrayRef<unsigned> loopIterationCounts,
+    DenseMap<Operation *, SmallVector<SmallVector<int64_t, 4>, 4>>
+        &loopAccessMatrices,
+    uint64_t sentinel) {
+
+  // Initially, we assume no temporal reuse. The cost is a big value - sentinel.
+  uint64_t cost = sentinel;
+
+  // Start with the innermost loop to check if the access matrix for an op has
+  // all zeros in the respective column. If yes, there is a O(n) reuse. The
+  // reuse gets multiplied for each loop index until the first loop index with
+  // no reuse is encountered.
+  uint64_t temporalReuse = 1;
+  for (auto &accessMatrixOpPair : loopAccessMatrices) {
+    temporalReuse = 1;
+    SmallVector<SmallVector<int64_t, 4>, 4> accessMatrix =
+        accessMatrixOpPair.second;
+    for (int i = permutation.size() - 1; i >= 0; i--) {
+      if (!checkColumnIsZero(accessMatrix, permutation[i]))
+        break;
+      temporalReuse *= loopIterationCounts[permutation[i]];
+    }
+    // Increase in temporalReuse decreases the cost.
+    cost -= temporalReuse;
+  }
+  return cost;
+}
+
+/// Removes `dstOp` from its current group and inserts it into the `srcOp`'s
 /// group. Updates `groupId` to reflect the changes.
 static void insertIntoReferenceGroup(
     SmallVector<llvm::SmallSet<Operation *, 8>, 8> &referenceGroups,
@@ -404,8 +417,8 @@ static void insertIntoReferenceGroup(
 }
 
 /// Groups ops in `loadAndStoreOps` into `referenceGroups` based on whether or
-/// not they exibit group-temporal or group-spatial reuse with respect to an
-/// affine.for op present at `innermostIndex` in the original loop nest.
+/// not they exhibit group-temporal or group-spatial reuse with respect to an
+/// affine.for op present at depth `innermostIndex` in the original loop nest.
 ///
 /// Please refer Steve Carr et. al for a detailed description.
 /// https://dl.acm.org/doi/abs/10.1145/195470.195557
@@ -418,7 +431,7 @@ static void buildReferenceGroups(
     unsigned innermostIndex,
     SmallVector<llvm::SmallSet<Operation *, 8>, 8> &referenceGroups) {
 
-  // Two accesses ref1 and ref2 belong to same reference group with respect
+  // Two accesses ref1 and ref2 belong to the same reference group with respect
   // to a loop if :
   // Criteria 1: There exists a dependence l and
   //     1.1 l is a loop-independent dependence or
@@ -429,9 +442,9 @@ static void buildReferenceGroups(
   // in the last subscript dimension, where d1 <= cache line size in terms of
   // array elements. All other subscripts must be identical.
   //
-  // This implementation starts with all accesses having their own group. Thus,
-  // if an access is not part of any group-reuse, it still has it's own group.
-  // Doing this takes care of self-spatial reuse.
+  // We start with all accesses having their own group. Thus, if an access is
+  // not part of any group-reuse, it still has it's own group. Doing this takes
+  // care of self-spatial reuse.
   constexpr unsigned cache_line_size = 64;
   unsigned numOps = loadAndStoreOps.size();
   referenceGroups.resize(numOps);
@@ -454,7 +467,7 @@ static void buildReferenceGroups(
       // Criteria 2
       if (srcAccess.memref == dstAccess.memref) {
         // For two memref accesses Ax+B, matrix A of both accesses should be
-        // equal. Only B should differ in last index.
+        // equal. Only B should differ in the last index.
         if (loopAccessMatrices[srcOp] != loopAccessMatrices[dstOp])
           continue;
         SmallVector<int64_t, 4> srcOpCV = constVector[srcOp];
@@ -468,7 +481,7 @@ static void buildReferenceGroups(
         }
         if (!onlyLastIndexVaries)
           continue;
-        // Difference in values in last index should be less than
+        // The difference in values in the last index should be less than the
         // cache_line_size/elementSize for a useful locality.
         unsigned elementSize = elementsSize[srcOp];
         if (!(abs(srcOpCV.back() - destOpCV.back()) <=
@@ -511,41 +524,45 @@ static void buildReferenceGroups(
   }
 }
 
-/// Calculates number of cache lines accessed by each affine.for op in the
+/// Calculates the number of cache lines accessed by each affine.for op in the
 /// `loopNest` if that affine.for is considered the innermost loop. Final
-/// values are stored in 'cacheLinesAccessCounts'.
+/// values are stored in 'cacheLinesAccessCounts'. Returns the maximum number
+/// of cache lines accessed by any affine.for during execution of the loop body.
 ///
 /// Please refer Steve Carr et. al for a detailed description.
 /// https://dl.acm.org/doi/abs/10.1145/195470.195557
-static void getCacheLineAccessCounts(
+static uint64_t getCacheLineAccessCounts(
     ArrayRef<AffineForOp> loopNest,
     SmallVector<Operation *, 8> &loadAndStoreOps,
     DenseMap<Operation *, SmallVector<SmallVector<int64_t, 4>, 4>>
         &loopAccessMatrices,
     DenseMap<Operation *, SmallVector<int64_t, 4>> &constVector,
     DenseMap<Operation *, unsigned> &elementsSize,
-    DenseMap<const AffineForOp *, long double> &cacheLinesAccessCounts) {
+    DenseMap<const AffineForOp *, uint64_t> &cacheLinesAccessCounts) {
 
-  unsigned loopNestSize = loopNest.size();
-  // Group of affine.load/store ops exibiting group spatial/temporal reuse.
+  // Assumption: Assume cache line size is 64 bytes.
+  constexpr unsigned cacheLineSize = 64;
+  uint64_t maxCacheLinesAccessed = 0;
+  // Groups of affine.load/store ops exhibiting group spatial/temporal reuse.
   SmallVector<llvm::SmallSet<Operation *, 8>, 8> refGroups;
-  for (unsigned innerloop = 0; innerloop < loopNestSize; innerloop++) {
+  for (unsigned innerloop = 0; innerloop < loopNest.size(); innerloop++) {
     AffineForOp forOp = loopNest[innerloop];
     // Build reference groups considering each `forOp` to be the innermost loop.
     buildReferenceGroups(loadAndStoreOps, loopAccessMatrices, constVector,
-                         elementsSize, loopNestSize, innerloop + 1, refGroups);
+                         elementsSize, loopNest.size(), innerloop + 1,
+                         refGroups);
     unsigned step = forOp.getStep();
     uint64_t trip =
         (forOp.getConstantUpperBound() - forOp.getConstantLowerBound()) / step +
         1;
-    // `totalCacheLineCount` represents overall number of cache lines accessed
-    // with this loop as the inner most loop.
+    // Represents the sum of cache lines accessed during execution of the entire
+    // loop body with this loop as the innermost loop.
     uint64_t totalCacheLineCount = 0;
     for (llvm::SmallSet<Operation *, 8> group : refGroups) {
       Operation *op = *group.begin();
       ArrayRef<SmallVector<int64_t, 4>> accessMatrix = loopAccessMatrices[op];
       unsigned stride = step * accessMatrix.back()[innerloop];
-
+      unsigned numEltPerCacheLine = cacheLineSize / elementsSize[op];
       // Number of cache lines this affine.for op accesses executing this op
       // `1` for loop-invariant references,
       // `trip/(cache_line_size/stride)` for consecutive accesses,
@@ -553,8 +570,8 @@ static void getCacheLineAccessCounts(
 
       // Start by assuming no-reuse.
       uint64_t cacheLinesForThisOp = trip;
-      // Test if this group is loop invariant or loop consecutive. In either of
-      // these cases, there is a reuse and hence number of cache lines accessed
+      // Test if this group is loop invariant or loop consecutive. In either
+      // case, there is reuse and hence the number of cache lines accessed
       // will be less than the iteration count (trip) of the loop.
       bool isLoopInvariant = true;
       bool isConsecutive = true;
@@ -567,63 +584,32 @@ static void getCacheLineAccessCounts(
       }
       if (isLoopInvariant)
         cacheLinesForThisOp = 1;
-      else if (stride < 8 && isConsecutive) {
-        // Assumption: cache_line_size/element size = 8.
-        // TODO: Implement for actual size of the elements in memref.
-        cacheLinesForThisOp = (trip * stride) / 8;
+      else if (stride < numEltPerCacheLine && isConsecutive) {
+        cacheLinesForThisOp = (trip * stride) / numEltPerCacheLine;
       }
       totalCacheLineCount += cacheLinesForThisOp;
     }
     cacheLinesAccessCounts[&loopNest[innerloop]] = totalCacheLineCount;
+    if (maxCacheLinesAccessed < totalCacheLineCount)
+      maxCacheLinesAccessed = totalCacheLineCount;
   }
-}
-
-/// Calculates a representative temporal reuse cost for a given permutation of
-/// the loop nest. A lower value returned means higher temporal reuse.
-static uint64_t getTemporalReuseCost(
-    ArrayRef<unsigned> permutation, ArrayRef<unsigned> loopIterationCounts,
-    DenseMap<Operation *, SmallVector<SmallVector<int64_t, 4>, 4>>
-        &loopAccessMatrices) {
-  uint64_t cost = 1;
-  // Initially we assume no temporal reuse, hence the cost is a big value
-  // (arbitrary chosen to be the size of the entire iteration space of the loop
-  // nest).
-  for (unsigned iterCount : loopIterationCounts)
-    cost *= iterCount;
-
-  // Start from innermost loop to check if the access matrix for an op has all
-  // zeros in the respective column. If yes, there is a O(n) reuse. The reuse
-  // gets multiplied for each loop index until the first loop index with no
-  // reuse is encountered.
-  uint64_t temporalReuse = 1;
-  for (auto &accessMatrixOpPair : loopAccessMatrices) {
-    temporalReuse = 1;
-    SmallVector<SmallVector<int64_t, 4>, 4> accessMatrix =
-        accessMatrixOpPair.second;
-    for (int i = permutation.size() - 1; i >= 0; i--) {
-      if (!checkColumnIsZero(accessMatrix, permutation[i]))
-        break;
-      temporalReuse *= loopIterationCounts[permutation[i]];
-    }
-    // Increase in temporalReuse decreases the cost.
-    cost -= temporalReuse;
-  }
-  return cost;
+  return maxCacheLinesAccessed;
 }
 
 /// Calculates a representative cost of this permutation considering spatial
 /// locality. Lower cost implies better spatial reuse. Uses the fact that loops
 /// with smaller locality at inner positions promote more reuse.
-static uint64_t getSpatialLocalityCost(
-    ArrayRef<unsigned> perm, SmallVector<AffineForOp, 4> &loopNest,
-    DenseMap<const AffineForOp *, long double> cacheLineCounts,
-    ArrayRef<unsigned> loopIterCounts) {
+static uint64_t
+getSpatialLocalityCost(ArrayRef<unsigned> perm,
+                       SmallVector<AffineForOp, 4> &loopNest,
+                       DenseMap<const AffineForOp *, uint64_t> cacheLineCounts,
+                       ArrayRef<unsigned> loopIterCounts, uint64_t sentinel) {
 
   uint64_t auxiliaryCost = 0;
   // Product of iteration count of inner loops.
   uint64_t iterSubSpaceSize = 1;
   // Maximum cache lines accessed by any affine.for op in the loop nest. Helpful
-  // in calculating sentinel - see below.
+  // in calculating the sentinel - see below.
   unsigned maxCacheLinesAccessed = 0;
   for (int i = perm.size() - 1; i >= 0; i--) {
     // Number of cache lines accessed by this loop at index i
@@ -634,29 +620,21 @@ static uint64_t getSpatialLocalityCost(
     iterSubSpaceSize *= loopIterCounts[perm[i]];
   }
 
-  // The optimal permutation is one in which the affine.for ops are arranged in
+  // The optimal permutation is the one in which arranges all affine.for ops in
   // descending order of their cache line access counts from left to right.
-
-  // However such a permutation will have the maximum 'auxiliaryCost' value. But
-  // we want a minimum cost for such a permutation.
-
-  // For this, we subtract the `auxiliaryCost` value from a sentinel value. We
-  // define sentinel value as follows: sentinel =
-  // Sum_for_all_loops(maxCacheLineAccessed * iterSubSpaceSize of each loop).
+  //
+  // However, such a permutation will have the maximum 'auxiliaryCost' value.
+  // But we want a minimum cost for such a permutation.
+  //
+  // For this, we subtract the `auxiliaryCost` value from the sentinel value.
   // Since the sentinel does not depend on any permutation of the loop nest, we
   // can be sure that the cost obtained is consistent across permutations.
-  uint64_t sentinel = 0;
-  iterSubSpaceSize = 1;
-  for (unsigned iterCount : loopIterCounts) {
-    sentinel += maxCacheLinesAccessed * iterSubSpaceSize;
-    iterSubSpaceSize *= iterCount;
-  }
   return sentinel - auxiliaryCost;
 }
 
 /// Fills `bestPerm` with the optimal permutation considering both the locality
-/// cost and the parallelism cost. If the current permutation is the best
-/// permutation for this loop nest, the method returns false.
+/// costs and the parallelism cost. If the current permutation is the best, it
+/// returns false.
 static bool getBestPermutation(SmallVector<AffineForOp, 4> &loopNest,
                                SmallVector<unsigned, 4> &loopIterationCounts,
                                DenseMap<Value, unsigned> &loopIndexMap,
@@ -667,86 +645,104 @@ static bool getBestPermutation(SmallVector<AffineForOp, 4> &loopNest,
   getAllLoadStores(loopNest[0], loadAndStoreOps);
 
   DenseMap<Operation *, unsigned> elementsSize;
-  // Get size of elements (in bytes) in each memref access. Later to be used
-  // to build reference groups.
+  // Get the size of elements (in bytes) in each memref access. Used later to
+  // build reference groups.
   getElementsSize(loadAndStoreOps, elementsSize);
 
   // Now calculate affine access matrices for all load/store ops in this loop
   // nest. The access matrices are needed to get both temporal reuse cost and
   // spatial reuse cost.
-
-  // For each memref access function Ax+B, this is  the collection of all A's
+  //
+  // For each memref access function Ax+b, this is  the collection of all A's
   // indexed by their respective affine.load/affine.store op.
   DenseMap<Operation *, SmallVector<SmallVector<int64_t, 4>, 4>>
       loopAccessMatrices;
-  // For a memref access function Ax+B, this represents B.
+  // For all memref access functions Ax+b, this represents the collection of
+  // b vectors.
   DenseMap<Operation *, SmallVector<int64_t, 4>> constVector;
-  // Get affine access matrices for all load/stores.
   getAffineAccessMatrices(loopNest[0], loadAndStoreOps, loopIndexMap,
                           loopAccessMatrices, constVector, loopNest.size());
 
   // Loop Carried Dependence vector. A 'true' at index 'i' means loop at depth
-  // 'i' carries a dependence. This is useful in calculating parallelism cost
-  // for each permutation.
+  // 'i' carries a dependence.
   SmallVector<bool, 4> loopCarriedDV;
-  getLoopCarriedDependenceVector(loopNest[0], loadAndStoreOps, loopCarriedDV,
-                                 loopNest.size());
+  getLoopCarriedDependenceVector(loopNest[0], loadAndStoreOps, loopNest.size(),
+                                 loopCarriedDV);
 
-  // Number of cache lines accessed (locality) by each affine.for op if it was
+  // Number of cache lines accessed by each affine.for op if it was considered
   // the innermost loop.
-  DenseMap<const AffineForOp *, long double> cacheLinesAccessCounts;
-  // Get locality information for each affine.forop in the loop nest. This will
-  // be useful in calculating spatial locality cost for each permutation.
-  getCacheLineAccessCounts(loopNest, loadAndStoreOps, loopAccessMatrices,
-                           constVector, elementsSize, cacheLinesAccessCounts);
+  DenseMap<const AffineForOp *, uint64_t> cacheLinesAccessCounts;
+  uint64_t maxCacheLinesAccessed;
+  maxCacheLinesAccessed = getCacheLineAccessCounts(
+      loopNest, loadAndStoreOps, loopAccessMatrices, constVector, elementsSize,
+      cacheLinesAccessCounts);
 
-  // Get all permutations which do not violate any dependence constraints.
-  SmallVector<SmallVector<unsigned, 4>, 8> validPerms;
-  getAllValidLoopInterchangePermutations(loopNest[0], loopNest.size(),
-                                         validPerms);
-
-  // Return false to indicate that no other valid permutation exists.
-  if (validPerms.size() < 2)
-    return false;
+  // Calculate sentinel values for spatial and temporal locality costs.
+  uint64_t spatialSentinel = 0;
+  uint64_t temporalSentinel = 1;
+  calculateSentinels(loopIterationCounts, maxCacheLinesAccessed,
+                     spatialSentinel, temporalSentinel);
+  SmallVector<unsigned, 4> permutation(loopNest.size());
+  std::iota(permutation.begin(), permutation.end(), 0);
+  unsigned permIndex = 0;
   unsigned bestPermIndex = 0;
-  for (unsigned i = 0; i < validPerms.size(); i++) {
-    uint64_t parallelCost =
-        getParallelismCost(validPerms[i], loopCarriedDV, loopIterationCounts);
-    uint64_t spatialCost = getSpatialLocalityCost(
-        validPerms[i], loopNest, cacheLinesAccessCounts, loopIterationCounts);
-    uint64_t temporalCost = getTemporalReuseCost(
-        validPerms[i], loopIterationCounts, loopAccessMatrices);
-
-    // Assumption: costs due to parallelism (synchronization) are 100x
-    // more expensive than those due to locality.
-    uint64_t cost = 100 * parallelCost + spatialCost + temporalCost;
-    if (cost < minCost) {
-      minCost = cost;
-      bestPermIndex = i;
+  SmallVector<AffineForOp, 4> perfectLoopNest;
+  getPerfectlyNestedLoops(perfectLoopNest, loopNest[0]);
+  // We make a tradeoff here. For large loop nests, we permute a maximum of four
+  // innermost loops. This tradeoff is necessary as larger loops have a very
+  // large number of permutations.
+  while (std::next_permutation(permutation.size() < 5 ? permutation.begin()
+                                                      : permutation.end() - 4,
+                               permutation.end())) {
+    permIndex++;
+    if (isValidLoopInterchangePermutation(perfectLoopNest, permutation)) {
+      uint64_t parallelCost =
+          getParallelismCost(permutation, loopCarriedDV, loopIterationCounts);
+      uint64_t spatialCost =
+          getSpatialLocalityCost(permutation, loopNest, cacheLinesAccessCounts,
+                                 loopIterationCounts, spatialSentinel);
+      uint64_t temporalCost =
+          getTemporalReuseCost(permutation, loopIterationCounts,
+                               loopAccessMatrices, temporalSentinel);
+      // Assumption: Costs due to parallelism (synchronization) are 100x more
+      // expensive than those due to locality.
+      uint64_t cost = 100 * parallelCost + spatialCost + temporalCost;
+      if (cost < minCost) {
+        minCost = cost;
+        bestPermIndex = permIndex;
+      }
     }
   }
-
-  // Check if best permutation is the original permutation. In that
-  // case, return false.
+  // Check if best permutation is the original permutation. In that case,
+  // return false.
   if (!bestPermIndex)
     return false;
 
+  // Iterate again to get the best permutation. Since we are working
+  // with only four innermost loops, iterating all the permutations
+  // is not very time-consuming.
+  std::iota(permutation.begin(), permutation.end(), 0);
+  while (std::next_permutation(permutation.size() < 5 ? permutation.begin()
+                                                      : permutation.end() - 4,
+                               permutation.end()),
+         --bestPermIndex)
+    ;
   //`permuteLoops()` (called in next step) maps loop 'i' to location
-  // bestPerm[i]. But here validPerms[bestPermIndex][i] maps to loop
-  // at depth 'i'. Hence, we need to reassemble values in bestPerm[i]
-  // as required for `permuteLoops()`.
+  // bestPerm[i]. But here permutation[i] maps to loop at depth i.
+  // Hence, we need to reassemble values in bestPerm[i] as required
+  // in `permuteLoops()`.
   bestPerm.resize(loopNest.size());
   for (unsigned i = 0; i < bestPerm.size(); i++)
-    bestPerm[validPerms[bestPermIndex][i]] = i;
+    bestPerm[permutation[i]] = i;
 }
 
 /// Finds and permutes the `loopVector` to the best possible permutation
-/// considering locality and parallelism of this loop nest.
+/// considering locality and parallelism.
 void runOnAffineLoopNest(SmallVector<AffineForOp, 4> &loopVector) {
 
   // With a postorder traversal, affine.forops in `loopVector`
   // are pushed in reverse order. We need to reverse this order to
-  // arrange them in loop nest order.
+  // arrange them in the loop nest order.
   std::reverse(loopVector.begin(), loopVector.end());
 
   // A map to hold index values for all affine.for IVs in the loop nest.
@@ -762,7 +758,7 @@ void runOnAffineLoopNest(SmallVector<AffineForOp, 4> &loopVector) {
     // for each memref.
     Value indVar = op.getInductionVar();
     loopIndexMap[indVar] = loopIndex++;
-    // Populate `loopIterationCounts` of each for loop in loop nest.
+    // Populate loop iteration count of each for loop in the loop nest.
     loopIterationCounts.push_back(
         (op.getConstantUpperBound() - op.getConstantLowerBound()) /
         op.getStep());
@@ -785,10 +781,10 @@ void LoopInterchange::runOnFunction() {
   (*function).walk([&](AffineForOp op) {
     loopVector.push_back(op);
 
-    // Check if `op` is a root of some loop nest.
+    // Check if `op` is the root of some loop nest.
     if ((op.getParentOp()->getName().getStringRef().str() == "func")) {
       // The loop nest should not have any affine.if op and should have
-      // rectangular shaped iteration space.
+      // rectangular-shaped iteration space.
       if (!hasAffineIfStatement(op) &&
           isRectangularAffineForLoopNest(loopVector)) {
         runOnAffineLoopNest(loopVector);
