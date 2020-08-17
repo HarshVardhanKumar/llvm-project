@@ -64,21 +64,21 @@ private:
 
   bool getBestPermutation(DenseMap<Value, unsigned> &loopIndexMap,
                                  SmallVector<unsigned, 4> &bestPerm);
-  /// Loop Carried Dependence vector. A 'true' at index 'i' means loop at depth
-  /// 'i' carries a dependence.
-  SmallVector<bool, 4> loopCarriedDV;
+  // Loop Carried Dependence vector. A 'true' at index 'i' means loop at depth
+  // 'i' carries a dependence.
+   SmallVector<bool, 4> loopCarriedDV;
 
-  /// Iteration count for each affine.for in this loop nest.
-  SmallVector<unsigned, 4> loopIterationCounts;
+  // Iteration count for each affine.for in this loop nest.
+   SmallVector<unsigned, 4> loopIterationCounts;
 
-  /// The loop nest.
-  SmallVector<AffineForOp, 4> loopVector;
+  // The loop nest.
+   SmallVector<AffineForOp, 4> loopVector;
 
   /// Number of cache lines accessed by each loop in `loopVector`.
-  DenseMap<const AffineForOp *, uint64_t> cacheLinesAccessCounts;
+   DenseMap<const AffineForOp *, uint64_t> cacheLinesAccessCounts;
 
-  /// List of all load/store ops in the loop nest body.
-  SmallVector<Operation *, 8> loadAndStoreOps;
+  // List of all load/store ops in the loop nest body.
+   SmallVector<Operation *, 8> loadAndStoreOps;
 };
 } // namespace
 
@@ -652,26 +652,13 @@ static void buildReferenceGroups(
     SmallVector<unsigned, 4> &bestPerm) {
   uint64_t minCost = UINT64_MAX;
   
-  // Get all affine.load and affine.store ops.
   getAllLoadStores();
   DenseMap<Operation *, unsigned> elementSizes;
-  // Get the size of elements (in bytes) in each memref access. Used later to
-  // build reference groups.
   getElementSizes(loadAndStoreOps, kDefaultEltSize, elementSizes);
-
-  // Now calculate affine access matrices for all load/store ops in this loop
-  // nest. The access matrices are needed to get both temporal reuse cost and
-  // spatial reuse cost.
-  //
-  // For each memref access function Ax+b, this is  the collection of all A's
-  // indexed by their respective affine.load/affine.store op.
   DenseMap<Operation *, SmallVector<SmallVector<int64_t, 4>, 4>>
       loopAccessMatrices;
   getAffineAccessMatrices(loadAndStoreOps, loopIndexMap, loopAccessMatrices);
   getLoopCarriedDependenceVector();
-  // Number of cache lines accessed by each affine.for op if it was considered
-  // the innermost loop.
-  DenseMap<const AffineForOp *, uint64_t> cacheLinesAccessCounts;
   getCacheLineAccessCounts(loopAccessMatrices,elementSizes);
   // Calculate sentinel value for temporal locality costs. Also, the sentinel
   // is fixed for a loop nest.
@@ -687,7 +674,6 @@ static void buildReferenceGroups(
   unsigned bestPermIndex = 0;
   SmallVector<AffineForOp, 4> perfectLoopNest;
   getPerfectlyNestedLoops(perfectLoopNest, loopVector[0]);
-
   // We make a tradeoff here. For large loop nests, we permute a maximum of four
   // innermost loops. This tradeoff is necessary as larger loops have a very
   // large number of permutations.
@@ -718,8 +704,8 @@ static void buildReferenceGroups(
   // with only four innermost loops, iterating all the permutations
   // is not very time-consuming.
   std::iota(permutation.begin(), permutation.end(), 0);
-  while (std::next_permutation(permutation.size() < 5 ? permutation.begin()
-                                                      : permutation.end() - 4,
+  while (std::next_permutation(permutation.size() < 4 ? permutation.begin()
+                                                      : permutation.end() - 3,
                                permutation.end()),
          --bestPermIndex);
   //`permuteLoops()` (called in next step) maps loop 'i' to location
