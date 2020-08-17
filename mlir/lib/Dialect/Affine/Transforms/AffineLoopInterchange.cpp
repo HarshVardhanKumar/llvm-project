@@ -66,10 +66,11 @@ static bool isRectangularAffineForLoopNest(ArrayRef<AffineForOp> loopNest) {
 /// loopIV or a terminal symbol.
 static void prepareCoeffientRow(AffineExpr expr, ArrayRef<Value> operands,
                                 DenseMap<Value, unsigned> &loopIndexMap,
-                                unsigned rowSize,
                                 SmallVector<int64_t, 4> &row) {
   // TODO: Implement support for terminal symbols in `expr`.
-  row.resize(rowSize);
+  // The value at the last index of `row` contains an element of the b-vector in
+  // Ax+b access fn.
+  row.resize(loopIndexMap.size()+1);
   switch (expr.getKind()) {
   case AffineExprKind::Add: {
     AffineBinaryOpExpr addExpr = expr.cast<AffineBinaryOpExpr>();
@@ -175,10 +176,6 @@ static void getAffineAccessMatrices(
       // Parse the l-th map result(access expr for l-th dim of this memref) to
       // get the l-th row of this op's access matrix.
       AffineExpr mapResult = mapResults[l];
-      // The +1 is for accomodating the vector b of Ax+b access functions.
-      unsigned rowSize = std::max(AffineForOpLoopNestSize,
-                                  map.getNumDims() + map.getNumSymbols()) +
-                         1;
       // Check if `mapResult` is a constant expr. If yes, no need to walk it.
       // Instead, add the value to the the b-vector of Ax+b and leave the row
       // unchanged. Here, we assume that the last column of an access matrix is
@@ -189,7 +186,7 @@ static void getAffineAccessMatrices(
       } else {
         mapResult.walk([&](AffineExpr expr) {
           // Each expr can be a combination of many affine expressions.
-          prepareCoeffientRow(expr, operands, loopIndexMap, rowSize,
+          prepareCoeffientRow(expr, operands, loopIndexMap,
                               loopAccessMatrices[srcOp][l]);
         });
       }
