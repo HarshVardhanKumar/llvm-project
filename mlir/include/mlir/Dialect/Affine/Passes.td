@@ -53,10 +53,6 @@ def AffineLoopInterchange
   let summary = "Performs loop interchange on all the affine loop nests"
                 " to improve locality and parallelism for multicores.";
   let constructor = "mlir::createAffineLoopInterchangePass()";
-  let options = [
-    Option<"cacheLineSizeInBytes", "cache-line-size", "uint64_t", /*default=*/"64",
-             "Set size of a cache line in bytes">,
-  ];
 }
 
 def AffineLoopTiling : FunctionPass<"affine-loop-tile"> {
