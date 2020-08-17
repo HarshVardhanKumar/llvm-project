@@ -302,11 +302,9 @@ static void getElementSizes(ArrayRef<Operation *> loadAndStoreOps,
   MemRefType memrefType;
   for (Operation *op : loadAndStoreOps) {
     if (isa<AffineLoadOp>(op)) {
-      AffineLoadOp loadOp = cast<AffineLoadOp>(*op);
-      memrefType = loadOp.getMemRefType();
+      memrefType = cast<AffineLoadOp>(*op).getMemRefType();
     } else if (isa<AffineStoreOp>(op)) {
-      AffineStoreOp storeOp = cast<AffineStoreOp>(*op);
-      memrefType = storeOp.getMemRefType();
+      memrefType = cast<AffineStoreOp>(*op).getMemRefType();
     }
     elementSizes[op] = memrefType.hasStaticShape()
                            ? getMemRefSizeInBytes(memrefType).getValue() /
@@ -317,7 +315,7 @@ static void getElementSizes(ArrayRef<Operation *> loadAndStoreOps,
 
 /// Calculates the loop-carried-dependence vector for this loop nest using all
 /// the load/store ops stored in `loadAndStoreOps`. A value `true` at i-th index
-/// means that loop at depth i in the loop nest carries a dependence.
+/// means that the loop at depth i carries a dependence.
 static void getLoopCarriedDependenceVector(ArrayRef<Operation *> loadAndStoreOps,
     unsigned loopNestSize, SmallVector<bool, 4> &loopCarriedDV) {
 
@@ -365,8 +363,8 @@ static uint64_t getParallelismCost(ArrayRef<unsigned> perm,
   return totalcost;
 }
 
-/// Calculates a representative temporal reuse cost for a given permutation of
-/// the loop nest. A lower value returned means higher temporal reuse.
+/// Calculates a representative temporal reuse cost for this permutation of the
+/// loop nest. A lower value returned means a higher temporal reuse.
 static uint64_t getTemporalReuseCost(
     ArrayRef<unsigned> permutation, ArrayRef<unsigned> loopIterationCounts,
     DenseMap<Operation *, SmallVector<SmallVector<int64_t, 4>, 4>>
@@ -404,7 +402,7 @@ static uint64_t getTemporalReuseCost(
 }
 
 /// Removes `dstOp` from its current group and inserts it into the `srcOp`'s
-/// group. Updates `groupId` to reflect the changes.
+/// group. Updates the `groupId` to reflect the changes.
 static void insertIntoReferenceGroup(
     Operation *srcOp, Operation *dstOp,
     DenseMap<Operation *, unsigned> &groupId,
@@ -418,8 +416,8 @@ static void insertIntoReferenceGroup(
 }
 
 /// Groups ops in `loadAndStoreOps` into `referenceGroups` based on whether or
-/// not they exhibit group-temporal or group-spatial reuse with respect to an
-/// affine.for op present at depth `innermostIndex` in the original loop nest.
+/// not they exhibit group-temporal or group-spatial reuse with respect to the
+/// loop present at depth `innermostIndex` in the loop nest.
 ///
 /// Please refer to a paper 'Compiler optimizations for improving data locality'
 /// by Steve Carr et. al for a detailed description.
@@ -534,8 +532,8 @@ static void buildReferenceGroups(
   }
 }
 
-/// Calculates the number of cache lines accessed by each loop in the `loopNest`
-/// if that loop is considered the innermost loop. Final values are stored in
+/// Calculates the number of cache lines accessed by each loop of the `loopNest`
+/// if it is considered as the innermost loop. Final values are stored in
 /// `cacheLinesAccessCounts`.
 ///
 /// Please refer to a paper 'Compiler optimizations for improving data locality'
@@ -598,8 +596,8 @@ static void getCacheLineAccessCounts(
   }
 }
 
-/// Calculates a representative cost of this permutation considering spatial
-/// locality. Lower cost implies better spatial reuse.
+/// Calculates a spatial locality cost of this permutation. Lower cost returned
+/// implies a better spatial reuse.
 static uint64_t
 getSpatialLocalityCost(ArrayRef<unsigned> perm, ArrayRef<AffineForOp> loopNest,
                        DenseMap<const AffineForOp *, uint64_t> cacheLineCounts,
@@ -617,9 +615,9 @@ getSpatialLocalityCost(ArrayRef<unsigned> perm, ArrayRef<AffineForOp> loopNest,
 }
 
 /// Fills `bestPerm` with the optimal permutation considering both the locality
-/// costs and the parallelism cost. `loopIndexMap` holds index values for each
-/// loopIV. `eltSize` is the default element size. If the current permutation is
-/// the best, it returns false.
+/// and the parallelism costs. `loopIndexMap` holds index values for each loopIV.
+/// `eltSize` is the default element size. Returns false if the original loop  
+/// order is the optimal permutation.
 static bool getBestPermutation(ArrayRef<AffineForOp> loopNest,
                                ArrayRef<unsigned> loopIterationCounts,
                                DenseMap<Value, unsigned> &loopIndexMap,
@@ -719,7 +717,7 @@ static bool getBestPermutation(ArrayRef<AffineForOp> loopNest,
 
 /// Finds and permutes the `loopVector` to the best possible permutation
 /// considering locality and parallelism. This method calls the `permuteLoops`
-/// method declared in LoopUtils.h
+/// method declared in the LoopUtils.h file.
 void LoopInterchange::runOnAffineLoopNest(
     SmallVector<AffineForOp, 4> &loopVector) {
   // Check if any pass option provided for cache line size.
