@@ -152,8 +152,7 @@ static void getAffineAccessMatrices(
     DenseMap<Operation *, SmallVector<SmallVector<int64_t, 4>, 4>>
         &loopAccessMatrices) {
 
-  unsigned numOps = loadAndStoreOps.size();
-  for (unsigned i = 0; i < numOps; ++i) {
+  for (unsigned i = 0; i < loadAndStoreOps.size(); ++i) {
     Operation *srcOp = loadAndStoreOps[i];
     MemRefAccess srcAccess(srcOp);
     AffineMap map;
@@ -447,8 +446,7 @@ static void buildReferenceGroups(
   // We start with all accesses having their own group. Thus, if an access is
   // not part of any group-reuse, it still has it's own group. Doing this takes
   // care of self-spatial reuse.
-  unsigned numOps = loadAndStoreOps.size();
-  referenceGroups.resize(numOps);
+  referenceGroups.resize(loadAndStoreOps.size());
   // Since we emulate groups using SmallVector, `groupID` is used to track
   // insertions/deletions among `referenceGroups`.
   DenseMap<Operation *, unsigned> groupId;
@@ -457,10 +455,10 @@ static void buildReferenceGroups(
     groupId[loadAndStoreOps[i]] = i;
     referenceGroups[i].insert(loadAndStoreOps[i]);
   }
-  for (unsigned i = 0; i < numOps; ++i) {
+  for (unsigned i = 0; i < loadAndStoreOps.size(); ++i) {
     Operation *srcOp = loadAndStoreOps[i];
     MemRefAccess srcAccess(srcOp);
-    for (unsigned j = i + 1; j < numOps; ++j) {
+    for (unsigned j = i + 1; j < loadAndStoreOps.size(); ++j) {
       Operation *dstOp = loadAndStoreOps[j];
       MemRefAccess dstAccess(dstOp);
       if (srcOp == dstOp)
