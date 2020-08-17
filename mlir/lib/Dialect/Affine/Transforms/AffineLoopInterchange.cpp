@@ -317,15 +317,15 @@ static void getElementSizes(ArrayRef<Operation *> loadAndStoreOps,
 /// the load/store ops stored in `loadAndStoreOps`. A value `true` at i-th index
 /// means that the loop at depth i carries a dependence.
 static void getLoopCarriedDependenceVector(ArrayRef<Operation *> loadAndStoreOps,
-    unsigned loopNestSize, SmallVector<bool, 4> &loopCarriedDV) {
+    unsigned nestDepth, SmallVector<bool, 4> &loopCarriedDV) {
 
   // `loopCarriedDV` should have one entry for each loop in the loop nest.
-  loopCarriedDV.resize(loopNestSize);
+  loopCarriedDV.resize(nestDepth);
   for (unsigned i = 0; i < loadAndStoreOps.size(); ++i) {
     Operation *srcOp = loadAndStoreOps[i];
     for (unsigned j = 0; j < loadAndStoreOps.size(); ++j) {
       Operation *dstOp = loadAndStoreOps[j];
-      for (unsigned depth = 1; depth <= loopNestSize + 1; ++depth) {
+      for (unsigned depth = 1; depth <= nestDepth + 1; ++depth) {
         MemRefAccess srcAccess(srcOp), dstAccess(dstOp);
         FlatAffineConstraints dependenceConstraints;
         SmallVector<DependenceComponent, 2> depComps;
