@@ -35,11 +35,11 @@ struct LoopInterchange : public AffineLoopInterchangeBase<LoopInterchange> {
   void handleImperfectlyNestedAffineLoops(Operation &funcOp);
   void runOnAffineLoopNest(SmallVector<AffineForOp, 4> &loopVector);
 
-  /// Default cache line size(in bytes) if nothing is provided in the pass
+  /// Default cache line size(in bytes) if nothing is provided in the pass 
   /// option.
   constexpr static unsigned kCacheLineSize = 64;
 
-  /// Default element size to use if the memref does not have a static shape.
+  /// Default element size to be used if the memref does not have a static shape.
   constexpr static unsigned kDefaultEltSize = 8;
 };
 } // namespace
@@ -68,18 +68,17 @@ static void prepareCoeffientRow(AffineExpr expr, ArrayRef<Value> operands,
                                 DenseMap<Value, unsigned> &loopIndexMap,
                                 SmallVector<int64_t, 4> &row) {
   // TODO: Implement support for terminal symbols in `expr`.
-  // The value at the last index of `row` contains an element of the b-vector in
-  // Ax+b access fn.
+  // The last element of each row is an element of the b-vector in Ax+b access fn.
   row.resize(loopIndexMap.size()+1);
   switch (expr.getKind()) {
   case AffineExprKind::Add: {
+    // Please note that in the case of add operation, `lhs` and `rhs` may be
+    // both dimExprs or the `lhs` a dimExpr and `rhs` a constant expr.
     AffineBinaryOpExpr addExpr = expr.cast<AffineBinaryOpExpr>();
     AffineExpr lhs = addExpr.getLHS();
     AffineExpr rhs = addExpr.getRHS();
     unsigned lhsPosition = 0;
     unsigned rhsPosition = 0;
-    // Please note that in the case of add operation, `lhs` and `rhs` may be
-    // both dimExprs or the `lhs` a dimExpr and `rhs` a constant expr.
     if (lhs.isa<AffineDimExpr>()) {
       auto dimExpr = lhs.cast<AffineDimExpr>();
       lhsPosition = loopIndexMap[operands[dimExpr.getPosition()]];
@@ -89,7 +88,7 @@ static void prepareCoeffientRow(AffineExpr expr, ArrayRef<Value> operands,
     // would've been encountered in other binary expr like mul etc.
     if (row[lhsPosition] == 0)
       row[lhsPosition] = 1;
-    // Now test if `rhs` is a constant expr?
+    // Now test if `rhs` is a constant expr.
     bool isConstRhs = false;
     if (rhs.isa<AffineDimExpr>()) {
       auto dimExpr = rhs.cast<AffineDimExpr>();
@@ -151,8 +150,7 @@ static void getAffineAccessMatrices(
     AffineForOp rootForOp, ArrayRef<Operation *> loadAndStoreOps,
     DenseMap<Value, unsigned> &loopIndexMap,
     DenseMap<Operation *, SmallVector<SmallVector<int64_t, 4>, 4>>
-        &loopAccessMatrices,
-    unsigned AffineForOpLoopNestSize) {
+        &loopAccessMatrices) {
 
   unsigned numOps = loadAndStoreOps.size();
   for (unsigned i = 0; i < numOps; ++i) {
@@ -643,13 +641,12 @@ static bool getBestPermutation(ArrayRef<AffineForOp> loopNest,
   // nest. The access matrices are needed to get both temporal reuse cost and
   // spatial reuse cost.
   //
-  // For each memref access function Ax+b, this is  the collection of all As 
-  // and b-vectors indexed by their respective affine.load/affine.store op.
-  // The b-vectors are stored in the last column of each access matrix.
+  // For each memref access function Ax+b, this is  the collection of all A's
+  // indexed by their respective affine.load/affine.store op.
   DenseMap<Operation *, SmallVector<SmallVector<int64_t, 4>, 4>>
       loopAccessMatrices;
   getAffineAccessMatrices(loopNest[0], loadAndStoreOps, loopIndexMap,
-                          loopAccessMatrices, loopNest.size());
+                          loopAccessMatrices);
 
   // Loop Carried Dependence vector. A 'true' at index 'i' means loop at depth
   // 'i' carries a dependence.
