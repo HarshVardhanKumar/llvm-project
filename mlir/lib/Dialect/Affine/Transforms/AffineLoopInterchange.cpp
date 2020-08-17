@@ -769,7 +769,7 @@ void LoopInterchange::runOnFunction() {
       // rectangular-shaped iteration space.
       if (!hasAffineIfStatement(op) && isRectangularAffineForLoopNest()) {
         runOnAffineLoopNest();
-        // Clear state for next loop nest.
+        // Clear the state for next loop nest.
         loopVector.clear();
         loopCarriedDV.clear();
         loopIterationCounts.clear();
