@@ -35,8 +35,7 @@ struct LoopInterchange : public AffineLoopInterchangeBase<LoopInterchange> {
   void handleImperfectlyNestedAffineLoops(Operation &funcOp);
   void runOnAffineLoopNest(SmallVector<AffineForOp, 4> &loopVector);
 
-  /// Default cache line size(in bytes) if nothing is provided in the pass 
-  /// option.
+  /// Default cache line size(in bytes) if nothing is provided in the pass option.
   constexpr static unsigned kCacheLineSize = 64;
 
   /// Default element size to be used if the memref does not have a static shape.
@@ -147,7 +146,7 @@ static void prepareCoeffientRow(AffineExpr expr, ArrayRef<Value> operands,
 /// load/store op). The param `loopIndexMap` is used for getting the position
 /// for coefficients of loopIVs (vector x) in each row of the matrix A.
 static void getAffineAccessMatrices(
-    AffineForOp rootForOp, ArrayRef<Operation *> loadAndStoreOps,
+    ArrayRef<Operation *> loadAndStoreOps,
     DenseMap<Value, unsigned> &loopIndexMap,
     DenseMap<Operation *, SmallVector<SmallVector<int64_t, 4>, 4>>
         &loopAccessMatrices) {
@@ -191,16 +190,16 @@ static void getAffineAccessMatrices(
   }
 }
 
-/// Separates `forOpA` from its siblings. After separation, `forOpA` receives
-/// a copy of its parent independent from other siblings. A loop nest such as:
+/// Separates `lastSibling` from its siblings. After separation, it receives
+/// a copy of the common parent independent from other siblings. A loop nest like:
 /// \code
-///     parent{forOpA, forOpB, forOpC}
+///     parent{forOpA, forOpB, lastSibling}
 /// \endcode
 /// becomes
 /// \code
-///     parent{forOpA}, parent{forOpB, forOpC}
+///     parent{lastSibling}, parent{forOpA, forOpB}
 /// \endcode
-static void separateSiblingLoops(AffineForOp &parentForOp, AffineForOp &forOpA,
+static void separateSiblingLoops(AffineForOp &parentForOp,
                                  SmallVector<AffineForOp, 4> &siblings) {
 
   OpBuilder builder(parentForOp.getOperation()->getBlock(),
@@ -212,31 +211,33 @@ static void separateSiblingLoops(AffineForOp &parentForOp, AffineForOp &forOpA,
   // in siblings to 'const' and this would prevent us from calling
   // getOperation() method. An attempt to call `getOperation()` in that case
   // throws errors.
-  //
-  // Take a note of the order in which `forOpA` and all other siblings are
-  // visited. We need this order to compare affine.for ops within `parentForOp`
-  // with their copy in `copyParentForOp`. Comparing forOp.getOperation() does
-  // not work in that case.
-  unsigned forOpAPosition = 0;
+  
+  // We always separate the `lastSibling` from the rest of its siblings. For this
+  // we need the order in which `lastSibling` and all other siblings are
+  // visited. We need this order to compare affine.for ops with their copy in 
+  // `copyParentForOp`. Comparing forOp.getOperation() does not work in that case.
+  AffineForOp lastSibling = siblings.back();
+  unsigned lastSiblingPosition = 0;
   llvm::SmallSet<unsigned, 8> siblingsIndices;
   unsigned siblingIndex = 0;
   parentForOp.getOperation()->walk([&](AffineForOp op) {
     siblingIndex++;
-    if (op.getOperation() == forOpA.getOperation())
-      forOpAPosition = siblingIndex;
+    if (op.getOperation() == lastSibling.getOperation())
+      lastSiblingPosition = siblingIndex;
     for (unsigned i = 0; i < siblings.size(); i++)
       if (op.getOperation() == siblings[i].getOperation())
         siblingsIndices.insert(siblingIndex);
   });
-  // Walk the copy of parentOp to erase all siblings other than `forOpA`.
+  // Walk the copy of parentOp to erase all siblings other than `lastSibling`.
   siblingIndex = 0;
   copyParentForOp.getOperation()->walk([&](AffineForOp op) {
     siblingIndex++;
-    if (siblingIndex != forOpAPosition && siblingsIndices.count(siblingIndex))
+    if (siblingIndex != lastSiblingPosition && 
+        siblingsIndices.count(siblingIndex))
       op.getOperation()->erase();
   });
-  // Erase `forOpA` from the original copy.
-  forOpA.getOperation()->erase();
+  // Erase `lastSibling` from the original copy.
+  lastSibling.getOperation()->erase();
 }
 
 /// Converts all imperfectly nested loop nests in `funcOp` to perfectly
@@ -267,7 +268,7 @@ void LoopInterchange::handleImperfectlyNestedAffineLoops(Operation &funcOp) {
         continue;
       oneChild = false;
       separateSiblingLoops(forOperations[loopNest.first],
-                           loopNest.second.back(), loopNest.second);
+                           loopNest.second);
       // We need to walk the function again since the structure of loop nests
       // within the funcOp body has changed.
       break;
@@ -314,11 +315,10 @@ static void getElementSizes(ArrayRef<Operation *> loadAndStoreOps,
   }
 }
 
-/// Calculates the loop-carried-dependence vector for this loop nest rooted at
-/// `rootForOp`. A value `true` at i-th index means that loop at depth i in the
-/// loop nest carries a dependence.
-static void getLoopCarriedDependenceVector(
-    AffineForOp rootForOp, ArrayRef<Operation *> loadAndStoreOps,
+/// Calculates the loop-carried-dependence vector for this loop nest using all
+/// the load/store ops stored in `loadAndStoreOps`. A value `true` at i-th index
+/// means that loop at depth i in the loop nest carries a dependence.
+static void getLoopCarriedDependenceVector(ArrayRef<Operation *> loadAndStoreOps,
     unsigned loopNestSize, SmallVector<bool, 4> &loopCarriedDV) {
 
   // `loopCarriedDV` should have one entry for each loop in the loop nest.
@@ -429,7 +429,7 @@ static void buildReferenceGroups(
     DenseMap<Operation *, SmallVector<SmallVector<int64_t, 4>, 4>>
         &loopAccessMatrices,
     DenseMap<Operation *, unsigned> &elementSizes, unsigned cacheLineSize,
-    unsigned maxDepth, unsigned innermostIndex,
+    unsigned nestDepth, unsigned innermostIndex,
     SmallVector<llvm::SmallSet<Operation *, 8>, 8> &referenceGroups) {
 
   // Two accesses ref1 and ref2 belong to the same reference group with respect
@@ -501,7 +501,7 @@ static void buildReferenceGroups(
         insertIntoReferenceGroup(srcOp, dstOp, groupId, referenceGroups);
       } else {
         // Criteria 1
-        for (unsigned depth = 1; depth <= maxDepth + 1; depth++) {
+        for (unsigned depth = 1; depth <= nestDepth + 1; depth++) {
           FlatAffineConstraints dependenceConstraints;
           SmallVector<DependenceComponent, 2> depComps;
           DependenceResult result = checkMemrefAccessDependence(
@@ -509,7 +509,7 @@ static void buildReferenceGroups(
           if (!hasDependence(result))
             continue;
           // Criteria 1.1
-          if (depth == maxDepth + 1) {
+          if (depth == nestDepth + 1) {
             // Loop-independent dependence. Put both ops in same group.
             insertIntoReferenceGroup(srcOp, dstOp, groupId, referenceGroups);
           } else {
@@ -517,7 +517,7 @@ static void buildReferenceGroups(
             // Search for dependence at depths other than innermostIndex. All
             // entries should be zero.
             bool hasDependence = false;
-            for (unsigned i = 0; i <= maxDepth; i++) {
+            for (unsigned i = 0; i <= nestDepth; i++) {
               if ((depComps[i].lb.getValue() != 0) && (i != innermostIndex)) {
                 hasDependence = true;
                 break;
@@ -643,13 +643,13 @@ static bool getBestPermutation(ArrayRef<AffineForOp> loopNest,
   // indexed by their respective affine.load/affine.store op.
   DenseMap<Operation *, SmallVector<SmallVector<int64_t, 4>, 4>>
       loopAccessMatrices;
-  getAffineAccessMatrices(loopNest[0], loadAndStoreOps, loopIndexMap,
+  getAffineAccessMatrices(loadAndStoreOps, loopIndexMap,
                           loopAccessMatrices);
 
   // Loop Carried Dependence vector. A 'true' at index 'i' means loop at depth
   // 'i' carries a dependence.
   SmallVector<bool, 4> loopCarriedDV;
-  getLoopCarriedDependenceVector(loopNest[0], loadAndStoreOps, loopNest.size(),
+  getLoopCarriedDependenceVector(loadAndStoreOps, loopNest.size(),
                                  loopCarriedDV);
   // Number of cache lines accessed by each affine.for op if it was considered
   // the innermost loop.
