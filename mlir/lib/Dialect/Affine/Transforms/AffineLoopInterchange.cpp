@@ -721,10 +721,6 @@ static void buildReferenceGroups(
 /// considering locality and parallelism. This method calls the `permuteLoops`
 /// method declared in the LoopUtils.h file.
 void LoopInterchange::runOnAffineLoopNest() {
-  unsigned cacheLineSize = kCacheLineSize;
-  // Check if any pass option provided for cache line size.
-  if (cacheLineSizeInBytes)
-    cacheLineSize = cacheLineSizeInBytes;
   // With a postorder traversal, affine.forops in `loopVector`
   // are pushed in reverse order. We need to reverse this order to
   // arrange them in the loop nest order.
