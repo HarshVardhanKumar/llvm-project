@@ -13,7 +13,7 @@ func @interchange_for_spatial_locality(%A: memref<2048x2048xf64>) {
 // Interchanged for spatial locality.
 // CHECK:       affine.for %[[IV0:.*]] = 0 to 2048 {
 // CHECK-NEXT:    affine.for %[[IV1:.*]] = 0 to 2048 {
-// CHECK-NEXT:      affine.load %{{.*}}[%[[IV0]], %[[IV1]]] : memref<2048x2048xf64>
+// CHECK-NEXT:     %{{.*}} = affine.load %{{.*}}[%[[IV0]], %[[IV1]]] : memref<2048x2048xf64>
 // CHECK-NEXT:      affine.store %{{.*}}, %{{.*}}[%[[IV0]], %[[IV1]]] : memref<2048x2048xf64>
 // CHECK-NEXT:    }
 // CHECK-NEXT:  }
@@ -34,8 +34,8 @@ func @interchange_for_spatial_temporal(%A: memref<2048xf64>) {
 // CHECK:       affine.for %[[IV0:.*]] = 0 to 2048 {
 // CHECK-NEXT:    affine.for %[[IV1:.*]] = 0 to 2048 {
 // CHECK-NEXT:      %{{.*}} = affine.load %{{.*}}[%[[IV0]]] : memref<2048xf64>
-// CHECK-NEXT:      affine.load %{{.*}}[%[[IV0]]] : memref<2048xf64>
-// CHECK-NEXT:      affine.load %{{.*}}[%[[IV1]]] : memref<2048xf64>
+// CHECK-NEXT:      %{{.*}} = affine.load %{{.*}}[%[[IV0]]] : memref<2048xf64>
+// CHECK-NEXT:      %{{.*}} = affine.load %{{.*}}[%[[IV1]]] : memref<2048xf64>
 // CHECK-NEXT:    }
 // CHECK-NEXT:  }
 
@@ -63,9 +63,9 @@ func @matmul_ijk(%A: memref<2048x2048xf64>, %B: memref<2048x2048xf64>, %C: memre
 // CHECK:      affine.for %[[IV0:.*]] = 0 to 2048 {
 // CHECK-NEXT:    affine.for %[[IV1:.*]] = 0 to 2048 {
 // CHECK-NEXT:      affine.for %[[IV2:.*]] = 0 to 2048 {
-// CHECK-NEXT:        affine.load %{{.*}}[%[[IV0]], %[[IV1]]] : memref<2048x2048xf64>
-// CHECK-NEXT:        affine.load %{{.*}}[%[[IV1]], %[[IV2]]] : memref<2048x2048xf64>
-// CHECK-NEXT:        affine.load %{{.*}}[%[[IV0]], %[[IV2]]] : memref<2048x2048xf64>
+// CHECK-NEXT:        %{{.*}} = affine.load %{{.*}}[%[[IV0]], %[[IV1]]] : memref<2048x2048xf64>
+// CHECK-NEXT:        %{{.*}} = affine.load %{{.*}}[%[[IV1]], %[[IV2]]] : memref<2048x2048xf64>
+// CHECK-NEXT:        %{{.*}} = affine.load %{{.*}}[%[[IV0]], %[[IV2]]] : memref<2048x2048xf64>
 // CHECK-NEXT:        mulf %{{.*}}, %{{.*}} : f64
 // CHECK-NEXT:        addf %{{.*}}, %{{.*}} : f64
 // CHECK-NEXT:        affine.store %{{.*}}, %{{.*}}[%[[IV0]], %[[IV2]]] : memref<2048x2048xf64>
