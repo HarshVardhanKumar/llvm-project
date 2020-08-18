@@ -275,9 +275,12 @@ static void separateSiblingLoops(AffineForOp &parentForOp,
 }
 
 /// Converts all the imperfectly nested loop nests in `funcOp` to perfectly
-/// nested loop nests by separating all the loops present at the same level.
-/// Each such loop receives a separate copy of the common parent. This process
-/// is repeated until each parent has only one child left.
+/// nested ones by separating the loops present at any level in the loop nest.
+/// That is, if two or more loops are present as siblings at some level in
+/// the loop nest, it will separate each of these siblings such that there is
+/// no common parent left in the new structure. Effectively, each sibling
+/// receives a separate copy of the common parent. This process is repeated 
+/// until each parent has only one cild left.
 void LoopInterchange::handleImperfectlyNestedAffineLoops(Operation &funcOp) {
   SmallVector<AffineForOp, 4> loopNest;
   DenseMap<Operation *, SmallVector<AffineForOp, 4>> forTree;
