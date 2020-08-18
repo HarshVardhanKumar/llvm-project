@@ -64,11 +64,11 @@ private:
   bool getBestPermutation(DenseMap<Value, unsigned> &loopIndexMap,
                                  SmallVector<unsigned, 4> &bestPerm);
   
-  // Loop Carried Dependence vector. A 'true' at index 'i' means the loop at depth
-  // 'i' carries a dependence.
+  // Loop Carried Dependence vector. A 'true' at index 'i' means that the loop at
+  // depth 'i' carries a dependence.
   SmallVector<bool, 4> loopCarriedDV;
 
-  // Iteration count for each loop in a given loop nest.
+  // Iteration count of each loop in the loop nest.
   SmallVector<unsigned, 4> loopIterationCounts;
 
   // The loop nest.
@@ -89,7 +89,7 @@ static bool hasAffineIfStatement(AffineForOp &forOp) {
   return walkResult.wasInterrupted();
 }
 
-/// Checks if a given loop nest has rectangular-shaped iteration space.
+/// Checks if the given loop nest has a rectangular-shaped iteration space.
 bool LoopInterchange::isRectangularAffineForLoopNest() {
   for (AffineForOp forOp : loopVector) {
     if (!forOp.hasConstantUpperBound() || !forOp.hasConstantLowerBound())
@@ -98,20 +98,22 @@ bool LoopInterchange::isRectangularAffineForLoopNest() {
   return true;
 }
 
-/// Fills `row` with the coefficients of loopIVs in `expr`. Any constant terms
-/// encountered in `expr` are added to `row.back()`which represents the b-vector
-/// component of the access function Ax+b. Every value in `operands` should
-/// either be a loopIV or a terminal symbol.
+/// Fills `row` with the coefficients of loopIVs in `expr`. Any constant term
+/// encountered is added to `row.back()`which represents the b-vector component
+/// of an access function Ax+b. Every value in `operands` should either be a
+/// loopIV or a terminal symbol.
 static void prepareCoeffientRow(AffineExpr expr, ArrayRef<Value> operands,
                                 DenseMap<Value, unsigned> &loopIndexMap,
                                 SmallVector<int64_t, 4> &row) {
-  // TODO: Implement support for terminal symbols in `expr`.
-  // The last index of the `row` is an element of the constant b-vector.
+  // TODO: Implement support for terminal symbols.
+  // The value at the last index of the `row` is an element of the constant 
+  // vector b.
   row.resize(loopIndexMap.size() + 1);
   switch (expr.getKind()) {
   case AffineExprKind::Add: {
-    // Please note that in the case of an add operation, both `lhs` and `rhs`
-    // may be dim exprs or the `lhs` a dim expr and the `rhs` a constant expr.
+    // Please note that in the case of an add operation, either both `lhs` and
+    // `rhs` are dim exprs or the `lhs` is a dim expr and the `rhs` is a constant 
+    // expr.
     AffineBinaryOpExpr addExpr = expr.cast<AffineBinaryOpExpr>();
     AffineExpr lhs = addExpr.getLHS();
     AffineExpr rhs = addExpr.getRHS();
@@ -121,9 +123,10 @@ static void prepareCoeffientRow(AffineExpr expr, ArrayRef<Value> operands,
       auto dimExpr = lhs.cast<AffineDimExpr>();
       lhsPosition = loopIndexMap[operands[dimExpr.getPosition()]];
     }
-    // Update the loopIV only if it has not been encountered before, Please note
+    // Update the loopIV only if it has not been encountered before. Please note
     // that it is possible that the same loopIV have been encountered before while
-    // parsing other exprs.
+    // parsing other exprs. In that case, the appropriate coefficient is already
+    // set.
     if (row[lhsPosition] == 0)
       row[lhsPosition] = 1;
     // The `rhs` may be a constant expr. In that case, no need to update the `row`.
@@ -137,7 +140,7 @@ static void prepareCoeffientRow(AffineExpr expr, ArrayRef<Value> operands,
     }
     if (row[rhsPosition] == 0 && !isConstRhs)
       row[rhsPosition] = 1;
-    break;
+    break
   }
   case AffineExprKind::Mul: {
     AffineBinaryOpExpr mulExpr = expr.cast<AffineBinaryOpExpr>();
@@ -180,9 +183,10 @@ static void prepareCoeffientRow(AffineExpr expr, ArrayRef<Value> operands,
   }
 }
 /// For a memref access function Ax+b, it calculates both A and b and stores
-/// them to `loopAccessMatrices`(a collection of the matrix A and the vector b
-/// for each load/store op). The param `loopIndexMap` is used for getting the
-/// position for coefficients of loopIVs (vector x) in each row of the matrix A.
+/// them to `loopAccessMatrices`(as a collection of both the matrix A and the
+/// vector b for each load/store op). The param `loopIndexMap` is used for 
+/// getting the position for coefficients of loopIVs (vector x) in each row of
+/// the matrix A.
 static void getAffineAccessMatrices(
     ArrayRef<Operation *> loadAndStoreOps,
     DenseMap<Value, unsigned> &loopIndexMap,
@@ -208,9 +212,9 @@ static void getAffineAccessMatrices(
       // Parse the l-th map result(access expr for the l-th dim of this memref)
       // to get the l-th row of this op's access matrix.
       AffineExpr mapResult = mapResults[l];
-      // Check if `mapResult` is a constant expr. If yes, no need to walk it.
-      // Instead, add the value to the the constant b-vector and leave the row
-      // unchanged. The last column of an access matrix stores the b-vector.
+      // Check if the `mapResult` is a constant expr. If yes, there is no need to
+      // walk it. Instead, add the value to the constant b-vector element and leave
+      // the row unchanged. The last column of an access matrix stores the b-vector.
       if (mapResult.isa<AffineConstantExpr>()) {
         auto constExpr = mapResult.cast<AffineConstantExpr>();
         loopAccessMatrices[srcOp][l].back() = constExpr.getValue();
@@ -249,7 +253,7 @@ static void separateSiblingLoops(AffineForOp &parentForOp,
   // We always separate the last sibling from the group. For this we'll need the 
   // order in which all the siblings are arranged. We need this order to compare 
   // loops with their cloned copy in `copyParentForOp`. Comparision using the
-  // AffineForOp.getOperation() does not work in that case.
+  // AffineForOp.getOperation() method does not work in this case.
   AffineForOp lastSibling = siblings.back();
   unsigned lastSiblingPosition = 0;
   llvm::SmallSet<unsigned, 8> siblingsIndices;
@@ -262,7 +266,7 @@ static void separateSiblingLoops(AffineForOp &parentForOp,
       if (op.getOperation() == siblings[i].getOperation())
         siblingsIndices.insert(siblingIndex);
   });
-  // Walk the cloned copy to erase all other siblings.
+  // Walk the cloned copy to erase all the other siblings.
   siblingIndex = 0;
   copyParentForOp.getOperation()->walk([&](AffineForOp op) {
     siblingIndex++;
@@ -275,10 +279,10 @@ static void separateSiblingLoops(AffineForOp &parentForOp,
 }
 
 /// Converts all the imperfectly nested loop nests in `funcOp` to perfectly
-/// nested ones by separating the loops present at any level in the loop nest.
-/// That is, if two or more loops are present as siblings at some level in
-/// the loop nest, it will separate each of these siblings such that there is
-/// no common parent left in the new structure. Effectively, each sibling
+/// nested ones by separating multiple loops present at one level in the loop
+/// nest. That is, if two or more loops are present as siblings at some level
+/// in the loop nest, it will separate each of those siblings such that there 
+/// is no common parent left in the new structure. Effectively, each sibling
 /// receives a separate copy of the common parent. This process is repeated 
 /// until each parent has only one cild left.
 void LoopInterchange::handleImperfectlyNestedAffineLoops(Operation &funcOp) {
