@@ -55,7 +55,7 @@ private:
 
   uint64_t getSpatialLocalityCost(ArrayRef<unsigned> perm);
 
-  uint64_t getParallelismCost(ArrayRef<unsigned> perm);
+  uint64_t getNumSyncsNeeded(ArrayRef<unsigned> perm);
 
   uint64_t getTemporalReuseCost(
       ArrayRef<unsigned> permutation,
@@ -387,20 +387,22 @@ void LoopInterchange::getLoopCarriedDependenceVector() {
   }
 }
 
-/// Calculates the parallelism cost for this permutation. A permutation having
-/// more number of free outer loops gets a smaller cost.
-uint64_t LoopInterchange::getParallelismCost(ArrayRef<unsigned> perm) {
-  uint64_t totalcost = 0;
-  uint64_t thisLoopcost = 1;
+/// Calculates the number of synchronizations needed in this permutation. 
+/// A permutation having the dependence carried on an inner loop requires
+/// less number of synchronizations.
+uint64_t LoopInterchange::getNumSyncsNeeded(ArrayRef<unsigned> perm) {
+  uint64_t totalSyncs = 1;
+  unsigned depDepth = 0;
+  // Find the depth at which dependence is carried.
   for (unsigned i = 0; i < perm.size(); i++) {
     if (!loopCarriedDV[perm[i]])
       continue;
-    thisLoopcost = 1;
-    for (unsigned j = i + 1; j < perm.size(); j++)
-      thisLoopcost *= loopIterationCounts[perm[j]];
-    totalcost += thisLoopcost;
+    depDepth = i;
+    break;
   }
-  return totalcost;
+  for (unsigned j = depDepth + 1; j < perm.size(); j++)
+    totalSyncs *= loopIterationCounts[perm[j]];
+  return totalSyncs;
 }
 
 /// Calculates the temporal reuse cost for this permutation. A lower value
@@ -683,13 +685,13 @@ bool LoopInterchange::getBestPermutation(
                                permutation.end())) {
     permIndex++;
     if (isValidLoopInterchangePermutation(perfectLoopNest, permutation)) {
-      uint64_t parallelCost = getParallelismCost(permutation);
+      uint64_t numSyncs = getNumSyncsNeeded(permutation);
       uint64_t spatialCost = getSpatialLocalityCost(permutation);
       uint64_t temporalCost = getTemporalReuseCost(
           permutation, loopAccessMatrices, temporalSentinel);
-      // Assumption: Costs due to parallelism (synchronization) are 128x more
-      // expensive than those due to locality.
-      uint64_t cost = (parallelCost << 7) + spatialCost + temporalCost;
+      // Assumption: Costs due to one sync. operation is approx 100x (128) more
+      // than one cache access.
+      uint64_t cost = (numSyncs << 7) + spatialCost + temporalCost;
       if (cost < minCost) {
         minCost = cost;
         bestPermIndex = permIndex;
