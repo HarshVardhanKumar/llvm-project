@@ -53,15 +53,15 @@ private:
           &loopAccessMatrices,
       DenseMap<Operation *, unsigned> &elementSizes);
 
-  uint64_t getSpatialLocalityCost(ArrayRef<unsigned> perm);
+  uint64_t getNumCacheLinesSpatialReuse(ArrayRef<unsigned> perm);
 
   uint64_t getNumSyncsNeeded(ArrayRef<unsigned> perm);
 
-  uint64_t getTemporalReuseCost(
+  uint64_t getNumCacheLinesTemporalReuse(
       ArrayRef<unsigned> permutation,
       DenseMap<Operation *, SmallVector<SmallVector<int64_t, 4>, 4>>
           &loopAccessMatrices,
-      uint64_t sentinel);
+      uint64_t maxTemporalReuse);
 
   bool getBestPermutation(DenseMap<Value, unsigned> &loopIndexMap,
                           SmallVector<unsigned, 4> &bestPerm);
@@ -405,25 +405,28 @@ uint64_t LoopInterchange::getNumSyncsNeeded(ArrayRef<unsigned> perm) {
   return totalSyncs;
 }
 
-/// Calculates the temporal reuse cost for this permutation. A lower value
-/// returned signifies a higher temporal reuse.
-uint64_t LoopInterchange::getTemporalReuseCost(
+/// Calculates an upper bound on the number of cache lines accessed in this
+/// permutation considering only temporal (and no spatial) reuse of memrefs.
+/// A smaller value returned signifies a larger temporal reuse. `maxPossibleReuse`
+/// denotes the upper limit on the temporal reuse count. Often it should be equal
+/// to the iteration space size of the loop nest.
+uint64_t LoopInterchange::getNumCacheLinesTemporalReuse(
     ArrayRef<unsigned> permutation,
     DenseMap<Operation *, SmallVector<SmallVector<int64_t, 4>, 4>>
         &loopAccessMatrices,
-    uint64_t sentinel) {
+    uint64_t maxPossibleReuse) {
 
-  // Initially, we assume no temporal reuse. The cost is a big value i.e
-  // sentinel.
-  uint64_t cost = sentinel;
+  // Initially, assume no temporal reuse. The cost then represents the fact
+  // that we need to access the cache everytime for each load/store. 
+  uint64_t cost = maxPossibleReuse;
 
   // Start with the innermost loop to check if the access matrix of an op has
   // all zeros in the respective column. If yes, there is a O(n) reuse. The
   // reuse gets multiplied everytime until the first loop with no reuse is
   // encountered.
-  uint64_t temporalReuse = 1;
+  uint64_t actualReuse = 1;
   for (auto &accessMatrixOpPair : loopAccessMatrices) {
-    temporalReuse = 1;
+    actualReuse = 1;
     SmallVector<SmallVector<int64_t, 4>, 4> accessMatrix =
         accessMatrixOpPair.second;
     for (int i = permutation.size() - 1; i >= 0; i--) {
@@ -436,10 +439,10 @@ uint64_t LoopInterchange::getTemporalReuseCost(
       }
       if (!isColumnAllZeros)
         break;
-      temporalReuse *= loopIterationCounts[permutation[i]];
+      actualReuse *= loopIterationCounts[permutation[i]];
     }
-    // An increase in the temporalReuse decreases the cost.
-    cost -= temporalReuse;
+    // An increase in the actual temporal reuse decreases the cost.
+    cost -= actualReuse;
   }
   return cost;
 }
@@ -632,18 +635,20 @@ void LoopInterchange::getCacheLineAccessCounts(
   }
 }
 
-/// Calculates the spatial locality cost for this permutation. Lower cost
-/// returned implies a better spatial reuse.
-uint64_t LoopInterchange::getSpatialLocalityCost(ArrayRef<unsigned> perm) {
-  uint64_t auxiliaryCost = 0;
+/// Calculates an upper bound on the number of cache lines accessed during the
+/// execution of the loop nest in this permutation considering only the spatial
+/// (no temporal) reuse of memrefs. A lower value returned implies a better spatial
+/// reuse.
+uint64_t LoopInterchange::getNumCacheLinesSpatialReuse(ArrayRef<unsigned> perm) {
+  uint64_t totalCLAccessed = 0;
   uint64_t iterSubSpaceSize = 1;
   for (int i = 0; i < perm.size(); i++) {
-    unsigned numberCacheLinesAccessed =
+    unsigned numCLThisLoop =
         cacheLinesAccessCounts[&loopVector[perm[i]]];
-    auxiliaryCost += numberCacheLinesAccessed * iterSubSpaceSize;
+    auxiliaryCost += numCLThisLoop * iterSubSpaceSize;
     iterSubSpaceSize *= loopIterationCounts[perm[i]];
   }
-  return auxiliaryCost;
+  return totalCLAccessed;
 }
 
 /// Fills the `bestPerm` with the optimal permutation obtained considering both
@@ -663,11 +668,11 @@ bool LoopInterchange::getBestPermutation(
   getAffineAccessMatrices(loadAndStoreOps, loopIndexMap, loopAccessMatrices);
   getLoopCarriedDependenceVector();
   getCacheLineAccessCounts(loopAccessMatrices, elementSizes);
-  // Calculate the sentinel value for the temporal locality costs. Also, the
-  // sentinel is invariant for a given loop nest.
-  uint64_t temporalSentinel = 1;
+  // Calculate the upper limit on the number of temporal reuse counts. This
+  // is invariant across all permutations of given loop nest.
+  uint64_t maxTemporalReuse = 1;
   for (auto loopIterC : loopIterationCounts) {
-    temporalSentinel *= loopIterC;
+    maxTemporalReuse *= loopIterC;
   }
 
   // Start testing each permutation.
@@ -686,9 +691,9 @@ bool LoopInterchange::getBestPermutation(
     permIndex++;
     if (isValidLoopInterchangePermutation(perfectLoopNest, permutation)) {
       uint64_t numSyncs = getNumSyncsNeeded(permutation);
-      uint64_t spatialCost = getSpatialLocalityCost(permutation);
-      uint64_t temporalCost = getTemporalReuseCost(
-          permutation, loopAccessMatrices, temporalSentinel);
+      uint64_t spatialCost = getNumCacheLinesSpatialReuse(permutation);
+      uint64_t temporalCost = getNumCacheLinesTemporalReuse(
+          permutation, loopAccessMatrices, maxTemporalReuse);
       // Assumption: Costs due to one sync. operation is approx 100x (128) more
       // than one cache access.
       uint64_t cost = (numSyncs << 7) + spatialCost + temporalCost;
