@@ -55,7 +55,7 @@ private:
 
   uint64_t getNumCacheLinesSpatialReuse(ArrayRef<unsigned> perm);
 
-  uint64_t getNumSyncsNeeded(ArrayRef<unsigned> perm);
+  uint64_t getNumSyncs(ArrayRef<unsigned> perm);
 
   uint64_t getNumCacheLinesTemporalReuse(
       ArrayRef<unsigned> permutation,
@@ -84,7 +84,7 @@ private:
 };
 } // namespace
 
-/// Returns true if any affine.if op found in the loop nest rooted at `forOp`
+/// Returns true if any affine-if op found in the loop nest rooted at `forOp`
 static bool hasAffineIfStatement(AffineForOp &forOp) {
   auto walkResult =
       forOp.walk([&](AffineIfOp op) { return WalkResult::interrupt(); });
@@ -100,10 +100,8 @@ bool LoopInterchange::isRectangularAffineForLoopNest() {
   return true;
 }
 
-/// Fills `row` with the coefficients of loopIVs in `expr`. Any constant term
-/// encountered is added to `row.back()`which represents the b-vector component
-/// of an access function Ax+b. Every value in `operands` should either be a
-/// loopIV or a terminal symbol.
+/// Fills `row` with the coefficients of loopIVs in `expr`. Every value in 
+/// `operands` should either be a loopIV or a terminal symbol.
 static void prepareCoeffientRow(AffineExpr expr, ArrayRef<Value> operands,
                                 DenseMap<Value, unsigned> &loopIndexMap,
                                 SmallVector<int64_t, 4> &row) {
@@ -185,11 +183,12 @@ static void prepareCoeffientRow(AffineExpr expr, ArrayRef<Value> operands,
   }
   }
 }
-/// For a memref access function Ax+b, it calculates both A and b and stores
-/// them to `loopAccessMatrices`(as a collection of both the matrix A and the
-/// vector b for each load/store op). The param `loopIndexMap` is used for
-/// getting the position for coefficients of loopIVs (vector x) in each row of
-/// the matrix A.
+
+/// Populates `loopAccessMatrices` with the access matrices (A|b) of all load 
+/// and store ops in the loop body. Please note that each affine access can be 
+/// represented as a linear system Ax+b (A is the affine access matrix, x is the 
+/// vector of loopIVs and b is the constant-term vector). `loopIndexMap` holds 
+/// depth locations of each loopIV in the original loop order.
 static void getAffineAccessMatrices(
     ArrayRef<Operation *> loadAndStoreOps,
     DenseMap<Value, unsigned> &loopIndexMap,
@@ -282,21 +281,21 @@ static void separateSiblingLoops(AffineForOp &parentForOp,
 }
 
 /// Converts all the imperfectly nested loop nests in `funcOp` to perfectly
-/// nested ones by separating multiple loops present at one level in the loop
-/// nest. That is, if two or more loops are present as siblings at some level
-/// in the loop nest, it will separate each of those siblings such that there
-/// is no common parent left in the new structure. Effectively, each sibling
-/// receives a separate copy of the common parent. This process is repeated
-/// until each parent has only one cild left.
+/// nested ones by separating all the loops present at the same depth in the
+/// loop nest. That is, if two or more loops are present as siblings at some
+/// depth, it will separate each of those siblings such that there is no 
+/// common parent left in the new structure. Effectively, each sibling receives
+/// a separate copy of the common parent. This process is repeated until each
+/// parent has only one child left.
 void LoopInterchange::handleImperfectlyNestedAffineLoops(Operation &funcOp) {
   SmallVector<AffineForOp, 4> loopNest;
   DenseMap<Operation *, SmallVector<AffineForOp, 4>> forTree;
   DenseMap<Operation *, AffineForOp> forOperations;
 
   // Stop splitting when each parent has only one child left.
-  bool oneChild = false;
-  while (!oneChild) {
-    oneChild = true;
+  bool onlyOneChild = false;
+  while (!onlyOneChild) {
+    onlyOneChild = true;
     // Walk the function to create a tree of affine.for operations.
     funcOp.walk([&](AffineForOp op) {
       loopNest.push_back(op);
@@ -310,7 +309,7 @@ void LoopInterchange::handleImperfectlyNestedAffineLoops(Operation &funcOp) {
       // This loop nest has no sibling problem. Check the next loop nest.
       if (loopNest.second.size() < 2)
         continue;
-      oneChild = false;
+      onlyOneChild = false;
       separateSiblingLoops(forOperations[loopNest.first], loopNest.second);
       // We need to walk the function again to create a new `forTree` since the
       // structure of the loop nests within the `funcOp` body has changed after
@@ -324,7 +323,7 @@ void LoopInterchange::handleImperfectlyNestedAffineLoops(Operation &funcOp) {
   return;
 }
 
-/// Scans the loop nest and collects all the load and store ops. The list
+/// Scans the loop nest to collect all the load and store ops. The list
 /// of all such ops is maintained in the private member `loadAndStoreOps`.
 void LoopInterchange::getAllLoadStores() {
   loopVector[0].getOperation()->walk([&](Operation *op) {
@@ -334,10 +333,10 @@ void LoopInterchange::getAllLoadStores() {
   });
 }
 
-/// Fills `elementSizes` with the size of the element types used in various
-/// memrefs in the loop nest body. These will be later used to check whether
-/// or not two accesses are within a cacheLineSize/elementSize distance apart
-/// for a successful reuse.
+/// Fills `elementSizes` with the size of the element types of all the memrefs
+/// in the loop nest body. These are later used to check whether or not two
+/// accesses are within a cacheLineSize/elementSize distance apart for a 
+/// successful reuse.
 static void getElementSizes(ArrayRef<Operation *> loadAndStoreOps,
                             unsigned defaultElementSize,
                             DenseMap<Operation *, unsigned> &elementSizes) {
@@ -356,9 +355,8 @@ static void getElementSizes(ArrayRef<Operation *> loadAndStoreOps,
   }
 }
 
-/// Calculates the loop-carried-dependence vector for a given loop nest. A value
-/// `true` at the i-th index means that the loop at depth i carries a
-/// dependence.
+/// Calculates the loop-carried-dependence vector for the given loop nest. A value
+/// `true` at the i-th index means there is a loop carried dependence at depth i.
 void LoopInterchange::getLoopCarriedDependenceVector() {
 
   // `loopCarriedDV` should have one entry for each loop.
@@ -387,13 +385,13 @@ void LoopInterchange::getLoopCarriedDependenceVector() {
   }
 }
 
-/// Calculates the number of synchronizations needed in this permutation. 
-/// A permutation having the dependence carried on an inner loop requires
-/// less number of synchronizations.
-uint64_t LoopInterchange::getNumSyncsNeeded(ArrayRef<unsigned> perm) {
+/// Calculates the number of synchronizations needed in this permutation of
+/// the loop nest. The permutations having dependence satisfied on inner loops
+/// require relatively less number of synchronizations.
+uint64_t LoopInterchange::getNumSyncs(ArrayRef<unsigned> perm) {
   uint64_t totalSyncs = 1;
+  // Depth at which dependence is satisfied.
   unsigned depDepth = 0;
-  // Find the depth at which dependence is carried.
   for (unsigned i = 0; i < perm.size(); i++) {
     if (!loopCarriedDV[perm[i]])
       continue;
@@ -406,10 +404,10 @@ uint64_t LoopInterchange::getNumSyncsNeeded(ArrayRef<unsigned> perm) {
 }
 
 /// Calculates an upper bound on the number of cache lines accessed in this
-/// permutation considering only temporal (and no spatial) reuse of memrefs.
+/// permutation considering only the temporal (and no spatial) reuse of memrefs.
 /// A smaller value returned signifies a larger temporal reuse. `maxPossibleReuse`
 /// denotes the upper limit on the temporal reuse count. Often it should be equal
-/// to the iteration space size of the loop nest.
+/// to the iteration space size of the given loop nest.
 uint64_t LoopInterchange::getNumCacheLinesTemporalReuse(
     ArrayRef<unsigned> permutation,
     DenseMap<Operation *, SmallVector<SmallVector<int64_t, 4>, 4>>
@@ -417,12 +415,12 @@ uint64_t LoopInterchange::getNumCacheLinesTemporalReuse(
     uint64_t maxPossibleReuse) {
 
   // Initially, assume no temporal reuse. The cost then represents the fact
-  // that we need to access the cache everytime for each load/store. 
+  // that we need to access the cache everytime. 
   uint64_t cost = maxPossibleReuse;
 
   // Start with the innermost loop to check if the access matrix of an op has
-  // all zeros in the respective column. If yes, there is a O(n) reuse. The
-  // reuse gets multiplied everytime until the first loop with no reuse is
+  // all zeros in the respective loopIV column. If yes, there is a O(n) reuse.
+  // The reuse gets multiplied everytime until the first loop with no reuse is
   // encountered.
   uint64_t actualReuse = 1;
   for (auto &accessMatrixOpPair : loopAccessMatrices) {
@@ -441,7 +439,7 @@ uint64_t LoopInterchange::getNumCacheLinesTemporalReuse(
         break;
       actualReuse *= loopIterationCounts[permutation[i]];
     }
-    // An increase in the actual temporal reuse decreases the cost.
+    // An increase in the temporal reuse decreases the cost.
     cost -= actualReuse;
   }
   return cost;
@@ -462,7 +460,7 @@ static void insertIntoReferenceGroup(
 
 /// Groups ops in `loadAndStoreOps` into `referenceGroups` based on whether or
 /// not they exhibit group-temporal or group-spatial reuse with respect to the
-/// loop present at depth `innermostIndex` in the loop nest.
+/// loop present at depth `innermostIndex`.
 ///
 /// Please refer to the paper 'Compiler optimizations for improving data
 /// locality' by Steve Carr et. al for a detailed description.
@@ -507,9 +505,9 @@ static void buildReferenceGroups(
       if (srcOp == dstOp)
         continue;
       // Criteria 2: Both the ops should access the same memref and both should
-      // have the same matrix A. Also, their constant vectors b should vary only
+      // have the same matrix A. Also, their constant-vectors b should vary only
       // at the last index. Please note that the last column of an acces matrix
-      // is the constant vector b for an access function Ax+b.
+      // is the constant-vector b.
       if (srcAccess.memref == dstAccess.memref) {
         bool onlyLastIndexVaries = true;
         for (unsigned row = 0;
@@ -522,8 +520,8 @@ static void buildReferenceGroups(
                 (row != loopAccessMatrices[srcOp].size() - 1 ||
                  col != loopAccessMatrices[srcOp][0].size() - 1)) {
               // If the two access matrices vary at any position other than the
-              // last row and last column (the last index of the b-vector), then
-              // these ops cannot be grouped together.
+              // last row and the last column (the last index of the b-vector),
+              // then these ops cannot be grouped together.
               onlyLastIndexVaries = false;
               break;
             }
@@ -575,8 +573,8 @@ static void buildReferenceGroups(
 }
 
 /// Calculates the number of cache lines accessed by each loop of the loop nest
-/// if considered as the innermost loop. Final values are stored in the private
-/// member variable `cacheLinesAccessCounts`.
+/// if it was the innermost loop. Final values are stored in the private member
+/// `cacheLinesAccessCounts`.
 ///
 /// Please refer to the paper 'Compiler optimizations for improving data
 /// locality' by Steve Carr et. al for a detailed description.
@@ -635,26 +633,29 @@ void LoopInterchange::getCacheLineAccessCounts(
   }
 }
 
-/// Calculates an upper bound on the number of cache lines accessed during the
-/// execution of the loop nest in this permutation considering only the spatial
-/// (no temporal) reuse of memrefs. A lower value returned implies a better spatial
-/// reuse.
+/// Calculates an upper bound on the number of cache lines accessed in this 
+/// permutation of the loop nest during the entire execution considering only the
+/// spatial (no temporal) reuse of memrefs. A lower value returned implies a  
+/// better spatial reuse.
 uint64_t LoopInterchange::getNumCacheLinesSpatialReuse(ArrayRef<unsigned> perm) {
   uint64_t totalCLAccessed = 0;
   uint64_t iterSubSpaceSize = 1;
   for (int i = 0; i < perm.size(); i++) {
     unsigned numCLThisLoop =
         cacheLinesAccessCounts[&loopVector[perm[i]]];
-    auxiliaryCost += numCLThisLoop * iterSubSpaceSize;
+    // A loop at depth i executes `iterSubSpaceSize` number of times. Its each
+    // execution consists of `loopIterationCounts[i]` number of iterations and 
+    // `numCLThisLoop` number of cache accesses.
+    totalCLAccessed += numCLThisLoop * iterSubSpaceSize;
     iterSubSpaceSize *= loopIterationCounts[perm[i]];
   }
   return totalCLAccessed;
 }
 
-/// Fills the `bestPerm` with the optimal permutation obtained considering both
-/// the locality and the parallelism costs. `loopIndexMap` holds index values
-/// for each loopIV. Returns false if the original loop order is the optimal
-/// permutation.
+/// Fills the `bestPerm` with the permutation which needs minimum number of
+/// syncs and cache line accesses. `loopIndexMap` holds index values for 
+/// each loopIV in original loop order. Returns false if the original loop
+/// order is the optimal permutation.
 bool LoopInterchange::getBestPermutation(
     DenseMap<Value, unsigned> &loopIndexMap,
     SmallVector<unsigned, 4> &bestPerm) {
@@ -669,7 +670,7 @@ bool LoopInterchange::getBestPermutation(
   getLoopCarriedDependenceVector();
   getCacheLineAccessCounts(loopAccessMatrices, elementSizes);
   // Calculate the upper limit on the number of temporal reuse counts. This
-  // is invariant across all permutations of given loop nest.
+  // is invariant across all permutations of a given loop nest.
   uint64_t maxTemporalReuse = 1;
   for (auto loopIterC : loopIterationCounts) {
     maxTemporalReuse *= loopIterC;
@@ -682,34 +683,34 @@ bool LoopInterchange::getBestPermutation(
   unsigned bestPermIndex = 0;
   SmallVector<AffineForOp, 4> perfectLoopNest;
   getPerfectlyNestedLoops(perfectLoopNest, loopVector[0]);
-  // We make a tradeoff here. For large loop nests, we permute a maximum of only
-  // three innermost loops. This tradeoff is necessary because larger loops have
-  // an extremely large number of permutations.
+  // We make a tradeoff here. For large loop nests having depth more than four, 
+  // we permute only the innermost three loops. This tradeoff is necessary because 
+  // larger loop nests have an extremely large number of permutations.
   while (std::next_permutation(permutation.size() <5  ? permutation.begin()
                                                       : permutation.end() - 3,
                                permutation.end())) {
     permIndex++;
     if (isValidLoopInterchangePermutation(perfectLoopNest, permutation)) {
-      uint64_t numSyncs = getNumSyncsNeeded(permutation);
-      uint64_t spatialCost = getNumCacheLinesSpatialReuse(permutation);
-      uint64_t temporalCost = getNumCacheLinesTemporalReuse(
+      uint64_t numSyncs = getNumSyncs(permutation);
+      uint64_t numCLSpatial = getNumCacheLinesSpatialReuse(permutation);
+      uint64_t numCLTemporal = getNumCacheLinesTemporalReuse(
           permutation, loopAccessMatrices, maxTemporalReuse);
-      // Assumption: Costs due to one sync. operation is approx 100x (128) more
-      // than one cache access.
-      uint64_t cost = (numSyncs << 7) + spatialCost + temporalCost;
+      // Assumption: Each sync. needs only one memory access. Since num of cycles
+      // for one memory access is approx 100x the cycles needed for one cache
+      // access, we asssume that cost due to one sync. operation is approx 100x 
+      // (we assume 128) than one cache access.
+      uint64_t cost = (numSyncs << 7) + numCLSpatial + numCLTemporal;
       if (cost < minCost) {
         minCost = cost;
         bestPermIndex = permIndex;
       }
     }
   }
-  // Check if the best permutation is indeed the original permutation. In that
-  // case, return false.
+  // If the original permutation is indeed the best permutation, return false.
   if (!bestPermIndex)
     return false;
-  // Iterate again to get the best permutation. Since we are working with only
-  // the three innermost loops, iterating all the permutations again does not
-  // cost much.
+  // Iterate again till we get to the best permutation. Since we are working with
+  // only the innermost three loops, this does not cost much.
   std::iota(permutation.begin(), permutation.end(), 0);
   while (std::next_permutation(permutation.size() <5 ? permutation.begin()
                                                       : permutation.end() - 3,
@@ -717,37 +718,30 @@ bool LoopInterchange::getBestPermutation(
          --bestPermIndex)
     ;
   //`permuteLoops()` (called in next step) maps loop 'i' to the location
-  //bestPerm[i].
-  // But here, permutation[i] maps to a loop at depth i. Hence, we need to
-  // reassemble the values in the bestPerm[i] as required in the
-  // `permuteLoops()`.
+  //bestPerm[i]. But here, permutation[i] maps to a loop at depth i. So, we
+  // have to reassemble the values in `bestPerm` as required by `permuteLoops`.
   bestPerm.resize(loopVector.size());
   for (unsigned i = 0; i < bestPerm.size(); i++)
     bestPerm[permutation[i]] = i;
 }
 
-/// Finds and permutes the loop nest to the best possible permutation to
-/// optimize for both locality and parallelism. This method calls the
+/// Finds and permutes the loop nest to its best possible permutation to
+/// minimize the number of syncs and cache access counts. This method calls the
 /// `permuteLoops` method declared in the LoopUtils.h file.
 void LoopInterchange::runOnAffineLoopNest() {
-  // With a postorder traversal, the affine.forops in `loopVector` are pushed
-  // in the reverse order. We need to reverse this order again to arrange them
-  // in the loop nest order.
+  // With a postorder traversal, the affine.for ops are pushed to the `loopVector`
+  // in reverse order. We need to reverse this order again to arrange them in the
+  // original loop nest order.
   std::reverse(loopVector.begin(), loopVector.end());
 
-  // A map to hold index values for all affine.for IVs in the loop nest.
-  // The map serves two purposes - It helps to maintain these index values
-  // across various permutations and it is used to get locations for each IV
-  // Value object in a coefficient row of the access matrix.
+  // A map to hold depth indices for all loop IVs of the loop nest. The loopIV
+  // for a loop at depth i receives the value i. The map is used to get the
+  // locations for each loop IV in rows of the access matrix.
   DenseMap<Value, unsigned> loopIndexMap;
   unsigned loopIndex = 0;
-
   for (auto &op : loopVector) {
-    // Assign IDs to all the loop variables. These are used later to populate
-    // the access-matrix rows of each memref.
     Value indVar = op.getInductionVar();
     loopIndexMap[indVar] = loopIndex++;
-    // Populate the loop iteration count vector.
     loopIterationCounts.push_back(
         (op.getConstantUpperBound() - op.getConstantLowerBound()) /
         op.getStep());
@@ -770,7 +764,7 @@ void LoopInterchange::runOnFunction() {
 
     // Check if `op` is the root of some loop nest.
     if ((op.getParentOp()->getName().getStringRef().str() == "func")) {
-      // The loop nest should not have any affine.if op and should have a
+      // The loop nest should not have any affine-if op and should have a
       // rectangular-shaped iteration space.
       if (!hasAffineIfStatement(op) && isRectangularAffineForLoopNest()) {
         runOnAffineLoopNest();
