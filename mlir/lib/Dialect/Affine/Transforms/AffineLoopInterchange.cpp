@@ -280,43 +280,46 @@ static void separateSiblingLoops(AffineForOp &parentForOp,
   lastSibling.getOperation()->erase();
 }
 
-/// Converts all the imperfectly nested loop nests in `funcOp` to perfectly
-/// nested ones by separating all the loops present at the same depth in the
-/// loop nest. That is, if two or more loops are present as siblings at some
-/// depth, it will separate each of those siblings such that there is no 
-/// common parent left in the new structure. Effectively, each sibling receives
-/// a separate copy of the common parent. This process is repeated until each
-/// parent has only one child left.
+/// Deals with imperfect loop nests where multiple loops appear as children
+/// of some common parent loop. Converts all such imperfectly nested loops
+/// in `funcOp` to perfectly nested ones by separating each sibling at a
+/// time. That is, if two or more loops are present as siblings at some depth,
+/// it will separate each of those siblings such that there is no common 
+/// parent left in the new structure. Each sibling receives a separate copy
+/// of the common parent. This process is repeated until each parent has only 
+/// one child left.
 void LoopInterchange::handleImperfectlyNestedAffineLoops(Operation &funcOp) {
-  SmallVector<AffineForOp, 4> loopNest;
+  // Store the arrangement of all the for-loops in the `funcOp` body in a tree
+  // structure. This makes storing the parent-child relationship an easy task. 
   DenseMap<Operation *, SmallVector<AffineForOp, 4>> forTree;
+  // A helper map for the `forTree`. Since `AffineForOp` cannot act as a for
+  // a DenseMap, we've to use a map to convert to and from an affine.for to an
+  // Operation* and vice-versa.
   DenseMap<Operation *, AffineForOp> forOperations;
 
   // Stop splitting when each parent has only one child left.
-  bool onlyOneChild = false;
-  while (!onlyOneChild) {
-    onlyOneChild = true;
+  bool oneChild = false;
+  while (!oneChild) {
+    oneChild = true;
     // Walk the function to create a tree of affine.for operations.
     funcOp.walk([&](AffineForOp op) {
-      loopNest.push_back(op);
       if (op.getParentOp()->getName().getStringRef() == "affine.for")
         forTree[op.getOperation()->getParentOp()].push_back(op);
-
       forOperations[op.getOperation()] = op;
     });
     // Separate one sibling at a time.
-    for (auto &loopNest : forTree) {
+    for (auto &parentChildrenPair : forTree) {
       // This loop nest has no sibling problem. Check the next loop nest.
-      if (loopNest.second.size() < 2)
+      if (parentChildrenPair.second.size() < 2)
         continue;
-      onlyOneChild = false;
-      separateSiblingLoops(forOperations[loopNest.first], loopNest.second);
-      // We need to walk the function again to create a new `forTree` since
-      // the structure of the loop nests within the `funcOp` body has changed
-      // after the separation.
+      oneChild = false;
+      separateSiblingLoops(forOperations[parentChildrenPair.first],
+                           parentChildrenPair.second);
+      // We need to walk the function again to create a new `forTree` since the
+      // structure of the loop nests within the `funcOp` body has changed after
+      // the separation.
       break;
     }
-    loopNest.clear();
     forTree.clear();
     forOperations.clear();
   }
