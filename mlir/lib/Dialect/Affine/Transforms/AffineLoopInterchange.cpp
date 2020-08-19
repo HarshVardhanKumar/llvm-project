@@ -311,9 +311,9 @@ void LoopInterchange::handleImperfectlyNestedAffineLoops(Operation &funcOp) {
         continue;
       onlyOneChild = false;
       separateSiblingLoops(forOperations[loopNest.first], loopNest.second);
-      // We need to walk the function again to create a new `forTree` since the
-      // structure of the loop nests within the `funcOp` body has changed after
-      // the separation.
+      // We need to walk the function again to create a new `forTree` since
+      // the structure of the loop nests within the `funcOp` body has changed
+      // after the separation.
       break;
     }
     loopNest.clear();
@@ -385,9 +385,9 @@ void LoopInterchange::getLoopCarriedDependenceVector() {
   }
 }
 
-/// Calculates the number of synchronizations needed in this permutation of
-/// the loop nest. The permutations having dependence satisfied on inner loops
-/// require relatively less number of synchronizations.
+/// Calculates the number of synchronizations needed in this loop permutation.
+/// Those permutations having dependence satisfied on inner loops require
+/// relatively less number of synchronizations.
 uint64_t LoopInterchange::getNumSyncs(ArrayRef<unsigned> perm) {
   uint64_t totalSyncs = 1;
   // Depth at which dependence is satisfied.
@@ -404,10 +404,10 @@ uint64_t LoopInterchange::getNumSyncs(ArrayRef<unsigned> perm) {
 }
 
 /// Calculates an upper bound on the number of cache lines accessed in this
-/// permutation considering only the temporal (and no spatial) reuse of memrefs.
-/// A smaller value returned signifies a larger temporal reuse. `maxPossibleReuse`
-/// denotes the upper limit on the temporal reuse count. Often it should be equal
-/// to the iteration space size of the given loop nest.
+/// loop permutation considering only the temporal (and no spatial) reuse of
+/// memrefs. A smaller value returned signifies a larger temporal reuse. The 
+/// param `maxPossibleReuse` denotes the upper limit on the temporal reuse count.
+///  Often it should be equal to the iteration space size of the given loop nest.
 uint64_t LoopInterchange::getNumCacheLinesTemporalReuse(
     ArrayRef<unsigned> permutation,
     DenseMap<Operation *, SmallVector<SmallVector<int64_t, 4>, 4>>
@@ -634,16 +634,16 @@ void LoopInterchange::getCacheLineAccessCounts(
 }
 
 /// Calculates an upper bound on the number of cache lines accessed in this 
-/// permutation of the loop nest during the entire execution considering only the
-/// spatial (no temporal) reuse of memrefs. A lower value returned implies a  
-/// better spatial reuse.
+/// loop permutation during the entire execution considering only the spatial
+/// (no temporal) reuse of memrefs. A lower value returned implies a better
+/// spatial reuse.
 uint64_t LoopInterchange::getNumCacheLinesSpatialReuse(ArrayRef<unsigned> perm) {
   uint64_t totalCLAccessed = 0;
   uint64_t iterSubSpaceSize = 1;
   for (int i = 0; i < perm.size(); i++) {
     unsigned numCLThisLoop =
         cacheLinesAccessCounts[&loopVector[perm[i]]];
-    // A loop at depth i executes `iterSubSpaceSize` number of times. Its each
+    // A loop at depth `i` executes `iterSubSpaceSize` number of times. Its each
     // execution consists of `loopIterationCounts[i]` number of iterations and 
     // `numCLThisLoop` number of cache accesses.
     totalCLAccessed += numCLThisLoop * iterSubSpaceSize;
@@ -652,10 +652,10 @@ uint64_t LoopInterchange::getNumCacheLinesSpatialReuse(ArrayRef<unsigned> perm) 
   return totalCLAccessed;
 }
 
-/// Fills the `bestPerm` with the permutation which needs minimum number of
-/// syncs and cache line accesses. `loopIndexMap` holds index values for 
-/// each loopIV in original loop order. Returns false if the original loop
-/// order is the optimal permutation.
+/// Fills the `bestPerm` with the loop permutation which requires the minimal
+/// number of syncs and cache accesses. `loopIndexMap` holds index values for
+/// each loopIV in the original loop order. Returns false if the original loop
+/// order is found to be the optimal loop permutation.
 bool LoopInterchange::getBestPermutation(
     DenseMap<Value, unsigned> &loopIndexMap,
     SmallVector<unsigned, 4> &bestPerm) {
@@ -676,7 +676,7 @@ bool LoopInterchange::getBestPermutation(
     maxTemporalReuse *= loopIterC;
   }
 
-  // Start testing each permutation.
+  // Start testing each loop permutation.
   SmallVector<unsigned, 4> permutation(loopVector.size());
   std::iota(permutation.begin(), permutation.end(), 0);
   unsigned permIndex = 0;
@@ -709,8 +709,8 @@ bool LoopInterchange::getBestPermutation(
   // If the original permutation is indeed the best permutation, return false.
   if (!bestPermIndex)
     return false;
-  // Iterate again till we get to the best permutation. Since we are working with
-  // only the innermost three loops, this does not cost much.
+  // Iterate again till we get to the best permutation. Since we are working
+  // with only the innermost three loops, this does not cost much.
   std::iota(permutation.begin(), permutation.end(), 0);
   while (std::next_permutation(permutation.size() <5 ? permutation.begin()
                                                       : permutation.end() - 3,
@@ -725,9 +725,9 @@ bool LoopInterchange::getBestPermutation(
     bestPerm[permutation[i]] = i;
 }
 
-/// Finds and permutes the loop nest to its best possible permutation to
-/// minimize the number of syncs and cache access counts. This method calls the
-/// `permuteLoops` method declared in the LoopUtils.h file.
+/// Finds and interchanges the current loop nest to its best possible permutation
+/// in order to minimize the number of syncs and the cache accesses. This method 
+/// calls the `permuteLoops` method declared in the LoopUtils.h file.
 void LoopInterchange::runOnAffineLoopNest() {
   // With a postorder traversal, the affine.for ops are pushed to the `loopVector`
   // in reverse order. We need to reverse this order again to arrange them in the
