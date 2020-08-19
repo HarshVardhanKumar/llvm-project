@@ -289,6 +289,8 @@ static void separateSiblingLoops(AffineForOp &parentForOp,
 /// of the common parent. This process is repeated until each parent has only 
 /// one child left.
 void LoopInterchange::handleImperfectlyNestedAffineLoops(Operation &funcOp) {
+  // TODO: Extend to other types of imperfectly nested loop nests.
+  
   // Store the arrangement of all the for-loops in the `funcOp` body in a tree
   // structure. This makes storing the parent-child relationship an easy task. 
   DenseMap<Operation *, SmallVector<AffineForOp, 4>> forTree;
